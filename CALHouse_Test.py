@@ -1,4 +1,5 @@
 import flet as ft
+import requests
 from datetime import datetime, timedelta
 
 # пока что надо
@@ -7,6 +8,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 USER_EMAIL = "user@smarthome.mtp"
 USER_ROLE = "Пользователь"
+API_BASE = "http://localhost:5000"
 
 devices = [
     {
@@ -213,6 +215,54 @@ def main(page: ft.Page):
         "energy_reports": False,
     }
 
+    device_items = [d.copy() for d in devices]
+
+    def map_api_device(device: dict):
+        name = str(device.get("name", "Устройство"))
+        lname = name.lower()
+        if "термо" in lname or "климат" in lname:
+            icon = "thermostat"
+        elif "свет" in lname or "ламп" in lname:
+            icon = "light"
+        elif "камер" in lname:
+            icon = "camera"
+        else:
+            icon = "energy"
+
+        is_on = bool(device.get("isOn", False))
+        return {
+            "id": int(device.get("id", 0)),
+            "name": name,
+            "room": str(device.get("room", "Неизвестно")),
+            "value": "ON" if is_on else "OFF",
+            "status": "online" if is_on else "offline",
+            "badge": None,
+            "icon": icon,
+            "trend": "flat",
+        }
+
+    def load_devices_from_api(show_error: bool = False):
+        nonlocal device_items
+        try:
+            response = requests.get(f"{API_BASE}/api/devices", timeout=5)
+            response.raise_for_status()
+            data = response.json()
+            if isinstance(data, list):
+                device_items = [map_api_device(item) for item in data]
+        except requests.RequestException:
+            if show_error:
+                toast(page, "API недоступен. Проверьте backend на http://localhost:5000")
+
+    def toggle_device_via_api(device_id: int):
+        try:
+            response = requests.put(f"{API_BASE}/api/devices/{device_id}/toggle", timeout=5)
+            response.raise_for_status()
+            load_devices_from_api(show_error=True)
+            toast(page, f"Устройство #{device_id} переключено")
+            build_root()
+        except requests.RequestException:
+            toast(page, f"Не удалось переключить устройство #{device_id}")
+
     # темная тема (единая палитра)
     def palette():
         if state.get("dark", False):
@@ -374,6 +424,7 @@ def main(page: ft.Page):
 
     def on_login(_):
         state["logged_in"] = True
+        load_devices_from_api(show_error=True)
         build_root()
 
     login_view = ft.Container(
@@ -547,8 +598,10 @@ def main(page: ft.Page):
         grid = ft.Column(
             spacing=12,
             controls=[
-                ft.Row(spacing=12, controls=[home_device_card(devices[0]), home_device_card(devices[1])]),
-                ft.Row(spacing=12, controls=[home_device_card(devices[2]), home_device_card(devices[3])]),
+                *[
+                    ft.Row(spacing=12, controls=[home_device_card(d) for d in device_items[i:i+2]])
+                    for i in range(0, len(device_items), 2)
+                ],
             ],
         )
 
@@ -735,6 +788,12 @@ def main(page: ft.Page):
             height=44,
             on_click=lambda e: toast(page, "Добавление (макет)"),
         )
+        refresh_btn = ft.OutlinedButton(
+            "Обновить",
+            icon=ft.Icons.REFRESH,
+            on_click=lambda e: (load_devices_from_api(show_error=True), build_root()),
+            height=44,
+        )
 
         def device_row(d):
             badge_text = "Онлайн" if d["status"] == "online" else ("Предупреждение" if d["status"] == "warning" else "Оффлайн")
@@ -785,17 +844,11 @@ def main(page: ft.Page):
                         ft.Row(
                             spacing=10,
                             controls=[
-                                ft.OutlinedButton(
-                                    "Изменить",
-                                    icon=ft.Icons.EDIT_OUTLINED,
+                                ft.ElevatedButton(
+                                    "Toggle",
+                                    icon=ft.Icons.POWER_SETTINGS_NEW,
                                     expand=True,
-                                    on_click=lambda e: toast(page, "Изменение (макет)"),
-                                ),
-                                ft.IconButton(
-                                    ft.Icons.DELETE,
-                                    icon_color=_c("#ffffff"),
-                                    bgcolor=_c("#ef4444"),
-                                    on_click=lambda e: toast(page, "Удаление (макет)"),
+                                    on_click=lambda e, device_id=d["id"]: toggle_device_via_api(device_id),
                                 ),
                             ],
                         ),
@@ -809,12 +862,12 @@ def main(page: ft.Page):
             spacing=14,
             controls=[
                 T("Управление устройствами", size=22, weight=ft.FontWeight.BOLD),
-                TM(f"Всего устройств: {len(devices)}"),
+                TM(f"Всего устройств: {len(device_items)}"),
                 search,
                 ft.Row(spacing=12, controls=[dd_type, dd_status]),
                 ft.Row(spacing=12, controls=[seg_grid, seg_table]),
-                add_btn,
-                *[device_row(d) for d in devices],
+                ft.Row(spacing=12, controls=[add_btn, refresh_btn]),
+                *[device_row(d) for d in device_items],
                 ft.Container(height=10),
             ],
         )
@@ -1199,6 +1252,7 @@ def main(page: ft.Page):
 
         page.bgcolor = C("BG")
         page.navigation_bar = nav
+        load_devices_from_api(show_error=False)
         nav.selected_index = state["tab"]
 
         if state["tab"] == 0:
