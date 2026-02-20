@@ -21,7 +21,7 @@
 ```bash
 cd backend/CalHouse.Api
 dotnet restore
-dotnet run
+dotnet run --urls "http://localhost:5000"
 ```
 
 API запускается на `http://localhost:5000`.
