@@ -64,7 +64,27 @@ public class DeviceStore
     private List<Device> ReadDevices()
     {
         var json = File.ReadAllText(_filePath);
-        return JsonSerializer.Deserialize<List<Device>>(json) ?? new List<Device>();
+        var devices = JsonSerializer.Deserialize<List<Device>>(json) ?? new List<Device>();
+
+        var requiresIdRepair = devices.Any(d => d.Id <= 0) || devices
+            .GroupBy(d => d.Id)
+            .Any(group => group.Key > 0 && group.Count() > 1);
+
+        if (!requiresIdRepair)
+        {
+            return devices;
+        }
+
+        _logger.LogInformation("Device data had missing or duplicate ids. Reassigning ids sequentially.");
+
+        for (var i = 0; i < devices.Count; i++)
+        {
+            devices[i].Id = i + 1;
+        }
+
+        SaveDevices(devices);
+
+        return devices;
     }
 
     private void SaveDevices(List<Device> devices)
