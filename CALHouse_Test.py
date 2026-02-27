@@ -828,12 +828,17 @@ def main(page: ft.Page):
         add_is_on_sw = ft.Switch(label="Включить сразу", value=False)
 
         def show_dialog(dialog: ft.AlertDialog):
-            if hasattr(page, "open"):
-                page.open(dialog)
-            else:
+            try:
+                # Most compatible path across Flet versions
                 page.dialog = dialog
                 dialog.open = True
                 page.update()
+            except Exception:
+                # Fallback for newer API style
+                if hasattr(page, "open"):
+                    page.open(dialog)
+                else:
+                    raise
 
         def close_dialog(dialog: ft.AlertDialog):
             if hasattr(page, "close"):
@@ -843,34 +848,37 @@ def main(page: ft.Page):
                 page.update()
 
         def open_add_device_dialog(_):
-            add_name_tf.value = ""
-            add_room_tf.value = ""
-            add_is_on_sw.value = False
+            try:
+                add_name_tf.value = ""
+                add_room_tf.value = ""
+                add_is_on_sw.value = False
 
-            dialog_ref = None
+                dialog_ref = None
 
-            def on_add_click(_):
-                success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
-                if success and dialog_ref is not None:
-                    close_dialog(dialog_ref)
+                def on_add_click(_):
+                    success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
+                    if success and dialog_ref is not None:
+                        close_dialog(dialog_ref)
 
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
-                content=ft.Column(
-                    tight=True,
-                    spacing=10,
-                    controls=[add_name_tf, add_room_tf, add_is_on_sw],
-                ),
-                actions=[
-                    ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog_ref)),
-                    ft.ElevatedButton("Сохранить", on_click=on_add_click),
-                ],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
+                dialog = ft.AlertDialog(
+                    modal=True,
+                    title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
+                    content=ft.Column(
+                        tight=True,
+                        spacing=10,
+                        controls=[add_name_tf, add_room_tf, add_is_on_sw],
+                    ),
+                    actions=[
+                        ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog_ref)),
+                        ft.ElevatedButton("Сохранить", on_click=on_add_click),
+                    ],
+                    actions_alignment=ft.MainAxisAlignment.END,
+                )
 
-            dialog_ref = dialog
-            show_dialog(dialog)
+                dialog_ref = dialog
+                show_dialog(dialog)
+            except Exception as ex:
+                toast(page, f"Не удалось открыть окно добавления: {ex}")
 
         add_btn = ft.ElevatedButton(
             "Добавить устройство",
