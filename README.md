@@ -47,20 +47,21 @@ API запускается на `http://localhost:5000`.
 cd "/home/glavniy/Рабочий стол/CALHouse-main"
 python3 -m venv .venv
 source .venv/bin/activate
-pip install flet requests
+pip install "flet==0.80.5" requests
 python CALHouse_Test.py
 ```
 
 Альтернативно (без venv):
 
 ```bash
-pip install flet requests
+pip install "flet==0.80.5" requests
 python CALHouse_Test.py
 ```
 
 В UI используется:
 
 - `API_BASE = "http://localhost:5000"`
+- Требуемая версия Flet: `0.80.5`
 
 ## Проверка API (Windows PowerShell)
 
@@ -180,3 +181,18 @@ python CALHouse_Test.py
 6. **Слишком много `GET /api/devices` в логах backend**
    - Это категория **частые перерисовки UI**. В текущей версии убран лишний глобальный авто-refresh из `build_root()`, чтобы уменьшить поток GET.
    - Для ручного обновления используйте кнопку "Обновить".
+
+7. **Установился `flet 0.81.x`, и UI ведёт себя не так, как ожидается**
+   - В проекте зафиксирована целевая версия `flet==0.80.5`.
+   - Проверьте версию:
+
+```bash
+python -c "import flet; print(flet.__version__)"
+```
+
+   - Если версия не `0.80.5`, переустановите в активированном venv:
+
+```bash
+pip uninstall -y flet flet-desktop-light
+pip install "flet==0.80.5" requests
+```
