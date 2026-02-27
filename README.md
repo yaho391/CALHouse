@@ -1,9 +1,12 @@
 # CALHouse / Система управления умным домом
 
-В проекте реализованы 2 рабочие функции через C# backend + существующий Flet UI (`CALHouse_Test.py`):
+В проекте реализована рабочая связка C# backend + Flet UI (`CALHouse_Test.py`) для управления устройствами:
 
 1. `GET /api/devices` — получить список устройств.
-2. `PUT /api/devices/{id}/toggle` — переключить устройство ON/OFF.
+2. `GET /api/devices/{id}` — получить устройство по ID.
+3. `POST /api/devices` — добавить устройство.
+4. `PUT /api/devices/{id}/toggle` — переключить устройство ON/OFF.
+5. `DELETE /api/devices/{id}` — удалить устройство.
 
 ## Структура
 
@@ -28,7 +31,10 @@ dotnet run --urls "http://localhost:5000"
 
 - `GET /` -> `CalHouse API is running`
 - `GET /api/devices`
+- `GET /api/devices/{id}`
+- `POST /api/devices`
 - `PUT /api/devices/{id}/toggle`
+- `DELETE /api/devices/{id}`
 - `GET /swagger` (только в Development)
 
 API запускается на `http://localhost:5000`.
@@ -54,14 +60,20 @@ python CALHouse_Test.py
 
 ```powershell
 Invoke-RestMethod -Method GET -Uri http://localhost:5000/api/devices
+Invoke-RestMethod -Method GET -Uri http://localhost:5000/api/devices/1
+Invoke-RestMethod -Method POST -Uri http://localhost:5000/api/devices -ContentType "application/json" -Body '{"name":"Лампа IKEA","room":"Спальня","isOn":false}'
 Invoke-RestMethod -Method PUT -Uri http://localhost:5000/api/devices/1/toggle
+Invoke-RestMethod -Method DELETE -Uri http://localhost:5000/api/devices/1
 ```
 
 ### Вариант 2: настоящий curl
 
 ```powershell
 curl.exe -X GET http://localhost:5000/api/devices
+curl.exe -X GET http://localhost:5000/api/devices/1
+curl.exe -X POST http://localhost:5000/api/devices -H "Content-Type: application/json" -d "{\"name\":\"Лампа IKEA\",\"room\":\"Спальня\",\"isOn\":false}"
 curl.exe -X PUT http://localhost:5000/api/devices/1/toggle
+curl.exe -X DELETE http://localhost:5000/api/devices/1
 ```
 
 Пример ответа `GET /api/devices`:
@@ -87,6 +99,36 @@ curl.exe -X PUT http://localhost:5000/api/devices/1/toggle
   "isOn": true
 }
 ```
+
+Пример запроса `POST /api/devices`:
+
+```json
+{
+  "name": "Лампа IKEA",
+  "room": "Спальня",
+  "isOn": false
+}
+```
+
+Пример ответа `POST /api/devices` (`201 Created`):
+
+```json
+{
+  "id": 4,
+  "name": "Лампа IKEA",
+  "room": "Спальня",
+  "isOn": false
+}
+```
+
+Пример ответа ошибки валидации (`400 Bad Request`):
+
+```json
+{
+  "message": "Name and room are required"
+}
+```
+
 
 
 ## Типовые ошибки и что делать
