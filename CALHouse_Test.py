@@ -273,6 +273,39 @@ def main(page: ft.Page):
         except requests.RequestException:
             toast(page, f"Не удалось переключить устройство #{device_id}")
 
+    def add_device_via_api(name: str, room: str, is_on: bool = False):
+        payload = {
+            "name": name.strip(),
+            "room": room.strip(),
+            "isOn": is_on,
+        }
+
+        if not payload["name"] or not payload["room"]:
+            toast(page, "Введите название и комнату")
+            return False
+
+        try:
+            response = requests.post(f"{API_BASE}/api/devices", json=payload, timeout=5)
+            response.raise_for_status()
+            created = response.json()
+            load_devices_from_api(show_error=True)
+            toast(page, f"Устройство добавлено: #{created.get('id', '?')} {created.get('name', '')}")
+            build_root()
+            return True
+        except requests.RequestException:
+            toast(page, "Не удалось добавить устройство")
+            return False
+
+    def delete_device_via_api(device_id: int):
+        try:
+            response = requests.delete(f"{API_BASE}/api/devices/{device_id}", timeout=5)
+            response.raise_for_status()
+            load_devices_from_api(show_error=True)
+            toast(page, f"Устройство #{device_id} удалено")
+            build_root()
+        except requests.RequestException:
+            toast(page, f"Не удалось удалить устройство #{device_id}")
+
     # темная тема (единая палитра)
     def palette():
         if state.get("dark", False):
@@ -790,13 +823,45 @@ def main(page: ft.Page):
         )
         seg_table = ft.OutlinedButton("Таблица", expand=True, on_click=lambda e: toast(page, "Пока макет"))
 
+        add_name_tf = themed_field(label="Название", hint_text="Например: Лампа IKEA")
+        add_room_tf = themed_field(label="Комната", hint_text="Например: Спальня")
+        add_is_on_sw = ft.Switch(label="Включить сразу", value=False)
+
+        def open_add_device_dialog(_):
+            add_name_tf.value = ""
+            add_room_tf.value = ""
+            add_is_on_sw.value = False
+
+            def on_add_click(_):
+                success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
+                if success:
+                    page.dialog.open = False
+                    page.update()
+
+            page.dialog = ft.AlertDialog(
+                modal=True,
+                title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[add_name_tf, add_room_tf, add_is_on_sw],
+                ),
+                actions=[
+                    ft.TextButton("Отмена", on_click=lambda e: (setattr(page.dialog, "open", False), page.update())),
+                    ft.ElevatedButton("Сохранить", on_click=on_add_click),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+            page.dialog.open = True
+            page.update()
+
         add_btn = ft.ElevatedButton(
             "Добавить устройство",
             icon=ft.Icons.ADD,
             bgcolor=_c("#0b1020"),
             color=_c("#ffffff"),
             height=44,
-            on_click=lambda e: toast(page, "Добавление (макет)"),
+            on_click=open_add_device_dialog,
         )
         refresh_btn = ft.OutlinedButton(
             "Обновить",
@@ -860,6 +925,11 @@ def main(page: ft.Page):
                                     icon=ft.Icons.POWER_SETTINGS_NEW,
                                     expand=True,
                                     on_click=lambda e, device_id=d["id"]: toggle_device_via_api(device_id),
+                                ),
+                                ft.OutlinedButton(
+                                    "Удалить",
+                                    icon=ft.Icons.DELETE_OUTLINE,
+                                    on_click=lambda e, device_id=d["id"]: delete_device_via_api(device_id),
                                 ),
                             ],
                         ),
