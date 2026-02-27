@@ -10,6 +10,8 @@ USER_EMAIL = "user@smarthome.mtp"
 USER_ROLE = "Пользователь"
 API_BASE = "http://localhost:5000"
 
+INVALID_DEVICE_NAMES = {"on", "off", "вкл", "выкл"}
+
 devices = [
     {
         "id": 1,
@@ -218,7 +220,12 @@ def main(page: ft.Page):
     device_items = [d.copy() for d in devices]
 
     def map_api_device(device: dict):
-        name = str(device.get("name", "Устройство"))
+        raw_id = int(device.get("id", 0))
+        name = str(device.get("name", "")).strip()
+
+        if not name or name.lower() in INVALID_DEVICE_NAMES:
+            name = f"Устройство #{raw_id if raw_id > 0 else '?'}"
+
         lname = name.lower()
         if "термо" in lname or "климат" in lname:
             icon = "thermostat"
@@ -230,15 +237,18 @@ def main(page: ft.Page):
             icon = "energy"
 
         is_on = bool(device.get("isOn", False))
+        room = str(device.get("room", "")).strip() or "Комната не указана"
+
         return {
-            "id": int(device.get("id", 0)),
+            "id": raw_id,
             "name": name,
-            "room": str(device.get("room", "Неизвестно")),
-            "value": "ON" if is_on else "OFF",
+            "room": room,
+            "value": "ВКЛ" if is_on else "ВЫКЛ",
             "status": "online" if is_on else "offline",
             "badge": None,
             "icon": icon,
             "trend": "flat",
+            "status_text": "Включено" if is_on else "Выключено",
         }
 
     def load_devices_from_api(show_error: bool = False):
@@ -579,12 +589,12 @@ def main(page: ft.Page):
                             top_right,
                         ],
                     ),
-                    T(d["name"], size=16, weight=ft.FontWeight.BOLD),
+                    T(f"#{d['id']} · {d['name']}", size=16, weight=ft.FontWeight.BOLD),
                     TM(d["room"]),
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            T(d["value"], size=22, weight=ft.FontWeight.BOLD),
+                            T(d["status_text"], size=18, weight=ft.FontWeight.BOLD),
                             trend_icon(d["trend"]),
                         ],
                     ),
@@ -839,7 +849,8 @@ def main(page: ft.Page):
                                 ),
                             ],
                         ),
-                        T(d["value"], size=28, weight=ft.FontWeight.BOLD),
+                        T(f"Устройство #{d['id']}", size=13, weight=ft.FontWeight.W_600, color=C("MUTED")),
+                        T(d["status_text"], size=24, weight=ft.FontWeight.BOLD),
                         TM("Обновлено: 2026-01-23 09:15", size=12),
                         ft.Row(
                             spacing=10,
