@@ -1,6 +1,7 @@
 import flet as ft
 import requests
 from datetime import datetime, timedelta
+import traceback
 
 # пока что надо
 import warnings
@@ -199,6 +200,10 @@ def toast(page: ft.Page, text: str):
     page.update()
 
 
+def debug_log(message: str):
+    print(f"[CALHouse UI] {message}")
+
+
 def main(page: ft.Page):
     page.title = "SmartHome UI"
     page.window_width = 1200
@@ -253,24 +258,30 @@ def main(page: ft.Page):
 
     def load_devices_from_api(show_error: bool = False):
         nonlocal device_items
+        debug_log(f"GET {API_BASE}/api/devices")
         try:
             response = requests.get(f"{API_BASE}/api/devices", timeout=5)
             response.raise_for_status()
             data = response.json()
+            debug_log(f"GET /api/devices -> {response.status_code}, items={len(data) if isinstance(data, list) else 'n/a'}")
             if isinstance(data, list):
                 device_items = [map_api_device(item) for item in data]
-        except requests.RequestException:
+        except requests.RequestException as ex:
+            debug_log(f"GET /api/devices failed: {ex}")
             if show_error:
                 toast(page, "API недоступен. Проверьте backend на http://localhost:5000")
 
     def toggle_device_via_api(device_id: int):
+        debug_log(f"Toggle click for device #{device_id}")
         try:
             response = requests.put(f"{API_BASE}/api/devices/{device_id}/toggle", timeout=5)
             response.raise_for_status()
+            debug_log(f"PUT /api/devices/{device_id}/toggle -> {response.status_code}")
             load_devices_from_api(show_error=True)
             toast(page, f"Устройство #{device_id} переключено")
             build_root()
-        except requests.RequestException:
+        except requests.RequestException as ex:
+            debug_log(f"PUT /api/devices/{device_id}/toggle failed: {ex}")
             toast(page, f"Не удалось переключить устройство #{device_id}")
 
     def add_device_via_api(name: str, room: str, is_on: bool = False):
@@ -279,31 +290,39 @@ def main(page: ft.Page):
             "room": room.strip(),
             "isOn": is_on,
         }
+        debug_log(f"Create device payload: {payload}")
 
         if not payload["name"] or not payload["room"]:
+            debug_log("Create device validation failed: empty name/room")
             toast(page, "Введите название и комнату")
             return False
 
         try:
+            debug_log(f"POST {API_BASE}/api/devices")
             response = requests.post(f"{API_BASE}/api/devices", json=payload, timeout=5)
             response.raise_for_status()
             created = response.json()
+            debug_log(f"POST /api/devices -> {response.status_code}, response={created}")
             load_devices_from_api(show_error=True)
             toast(page, f"Устройство добавлено: #{created.get('id', '?')} {created.get('name', '')}")
             build_root()
             return True
-        except requests.RequestException:
+        except requests.RequestException as ex:
+            debug_log(f"POST /api/devices failed: {ex}")
             toast(page, "Не удалось добавить устройство")
             return False
 
     def delete_device_via_api(device_id: int):
+        debug_log(f"Delete click for device #{device_id}")
         try:
             response = requests.delete(f"{API_BASE}/api/devices/{device_id}", timeout=5)
             response.raise_for_status()
+            debug_log(f"DELETE /api/devices/{device_id} -> {response.status_code}")
             load_devices_from_api(show_error=True)
             toast(page, f"Устройство #{device_id} удалено")
             build_root()
-        except requests.RequestException:
+        except requests.RequestException as ex:
+            debug_log(f"DELETE /api/devices/{device_id} failed: {ex}")
             toast(page, f"Не удалось удалить устройство #{device_id}")
 
     # темная тема (единая палитра)
@@ -848,6 +867,7 @@ def main(page: ft.Page):
                 page.update()
 
         def open_add_device_dialog(_):
+            debug_log("Add device button clicked")
             try:
                 add_name_tf.value = ""
                 add_room_tf.value = ""
@@ -856,6 +876,7 @@ def main(page: ft.Page):
                 dialog_ref = None
 
                 def on_add_click(_):
+                    debug_log("Add device dialog: save clicked")
                     success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
                     if success and dialog_ref is not None:
                         close_dialog(dialog_ref)
@@ -876,8 +897,10 @@ def main(page: ft.Page):
                 )
 
                 dialog_ref = dialog
+                debug_log("Add device dialog opened")
                 show_dialog(dialog)
             except Exception as ex:
+                debug_log(f"Open add device dialog failed: {ex}\n{traceback.format_exc()}")
                 toast(page, f"Не удалось открыть окно добавления: {ex}")
 
         add_btn = ft.ElevatedButton(
