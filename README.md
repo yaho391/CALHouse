@@ -41,6 +41,18 @@ API запускается на `http://localhost:5000`.
 
 ## Запуск frontend
 
+Рекомендуется запускать UI в отдельном виртуальном окружении Python:
+
+```bash
+cd "/home/glavniy/Рабочий стол/CALHouse-main"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install flet requests
+python CALHouse_Test.py
+```
+
+Альтернативно (без venv):
+
 ```bash
 pip install flet requests
 python CALHouse_Test.py
@@ -151,3 +163,20 @@ python CALHouse_Test.py
 
 4. **`curl -X` в PowerShell не работает как в Linux**
    - Используйте `Invoke-RestMethod` или `curl.exe`, а не alias `curl`.
+
+5. **Кнопка “Добавить устройство” нажимается, но на backend нет `POST /api/devices`**
+   - Это обычно категория **UI-логика/сценарий**, а не backend URL:
+     1) форма добавления не открылась,
+     2) форма открылась, но не нажали "Сохранить",
+     3) поля `Название` или `Комната` пустые (валидация не отправляет POST),
+     4) запущена старая копия UI из другой папки,
+     5) backend недоступен по `API_BASE`.
+   - Как должно быть:
+     - клик "Добавить устройство" -> в консоли UI: `[CALHouse UI] Add device button clicked` + `Add device form opened`;
+     - клик "Сохранить" -> `[CALHouse UI] Add device form: save clicked` + `POST http://localhost:5000/api/devices`;
+     - на backend появляется `Request starting HTTP/1.1 POST http://localhost:5000/api/devices`.
+   - Если в backend видны только `GET /api/devices`, значит запрос на создание не дошёл до этапа "Сохранить" или был заблокирован валидацией.
+
+6. **Слишком много `GET /api/devices` в логах backend**
+   - Это категория **частые перерисовки UI**. В текущей версии убран лишний глобальный авто-refresh из `build_root()`, чтобы уменьшить поток GET.
+   - Для ручного обновления используйте кнопку "Обновить".

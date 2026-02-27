@@ -214,6 +214,7 @@ def main(page: ft.Page):
         "logged_in": False,
         "tab": 0,
         "history_mode": "list",  # list/table
+        "show_add_form": False,
         "dark": False,
         "notif_push": True,
         "notif_email": True,
@@ -846,62 +847,47 @@ def main(page: ft.Page):
         add_room_tf = themed_field(label="Комната", hint_text="Например: Спальня")
         add_is_on_sw = ft.Switch(label="Включить сразу", value=False)
 
-        def show_dialog(dialog: ft.AlertDialog):
-            try:
-                # Most compatible path across Flet versions
-                page.dialog = dialog
-                dialog.open = True
-                page.update()
-            except Exception:
-                # Fallback for newer API style
-                if hasattr(page, "open"):
-                    page.open(dialog)
-                else:
-                    raise
+        def show_dialog(dialog):
+            if dialog not in page.overlay:
+                page.overlay.append(dialog)
+            page.open(dialog)
+            page.update()
 
-        def close_dialog(dialog: ft.AlertDialog):
-            if hasattr(page, "close"):
-                page.close(dialog)
-            else:
-                dialog.open = False
-                page.update()
+        def close_dialog(dialog):
+            page.close(dialog)
+            page.update()
 
         def open_add_device_dialog(_):
             debug_log("Add device button clicked")
-            try:
-                add_name_tf.value = ""
-                add_room_tf.value = ""
-                add_is_on_sw.value = False
+            add_name_tf.value = ""
+            add_room_tf.value = ""
+            add_is_on_sw.value = False
+            dialog_ref = None
 
-                dialog_ref = None
+            def on_save_click(_):
+                debug_log("Add device dialog: save clicked")
+                success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
+                if success and dialog_ref is not None:
+                    close_dialog(dialog_ref)
 
-                def on_add_click(_):
-                    debug_log("Add device dialog: save clicked")
-                    success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
-                    if success and dialog_ref is not None:
-                        close_dialog(dialog_ref)
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[add_name_tf, add_room_tf, add_is_on_sw],
+                ),
+                actions=[
+                    ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog_ref)),
+                    ft.ElevatedButton("Сохранить", on_click=on_save_click),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
 
-                dialog = ft.AlertDialog(
-                    modal=True,
-                    title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
-                    content=ft.Column(
-                        tight=True,
-                        spacing=10,
-                        controls=[add_name_tf, add_room_tf, add_is_on_sw],
-                    ),
-                    actions=[
-                        ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog_ref)),
-                        ft.ElevatedButton("Сохранить", on_click=on_add_click),
-                    ],
-                    actions_alignment=ft.MainAxisAlignment.END,
-                )
-
-                dialog_ref = dialog
-                debug_log("Add device dialog opened")
-                show_dialog(dialog)
-            except Exception as ex:
-                debug_log(f"Open add device dialog failed: {ex}\n{traceback.format_exc()}")
-                toast(page, f"Не удалось открыть окно добавления: {ex}")
+            dialog_ref = dialog
+            show_dialog(dialog)
+            debug_log(f"Add device dialog opened; overlay_size={len(page.overlay)}; open={dialog.open}")
 
         add_btn = ft.ElevatedButton(
             "Добавить устройство",
@@ -916,6 +902,30 @@ def main(page: ft.Page):
             icon=ft.Icons.REFRESH,
             on_click=lambda e: (load_devices_from_api(show_error=True), build_root()),
             height=44,
+        )
+
+        add_form = ft.Container(
+            visible=state.get("show_add_form", False),
+            padding=16,
+            border_radius=16,
+            bgcolor=C("CARD"),
+            border=ft.border.all(1, C("BORDER")),
+            content=ft.Column(
+                spacing=10,
+                controls=[
+                    T("Новое устройство", size=18, weight=ft.FontWeight.BOLD),
+                    add_name_tf,
+                    add_room_tf,
+                    add_is_on_sw,
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.END,
+                        controls=[
+                            ft.TextButton("Отмена", on_click=cancel_add_device),
+                            ft.ElevatedButton("Сохранить", on_click=submit_add_device),
+                        ],
+                    ),
+                ],
+            ),
         )
 
         def device_row(d):
@@ -996,6 +1006,7 @@ def main(page: ft.Page):
                 ft.Row(spacing=12, controls=[dd_type, dd_status]),
                 ft.Row(spacing=12, controls=[seg_grid, seg_table]),
                 ft.Row(spacing=12, controls=[add_btn, refresh_btn]),
+                add_form,
                 *[device_row(d) for d in device_items],
                 ft.Container(height=10),
             ],
@@ -1366,6 +1377,7 @@ def main(page: ft.Page):
     def do_logout():
         state["logged_in"] = False
         state["tab"] = 0
+        state["show_add_form"] = False
         build_root()
 
     def build_root():
@@ -1381,7 +1393,6 @@ def main(page: ft.Page):
 
         page.bgcolor = C("BG")
         page.navigation_bar = nav
-        load_devices_from_api(show_error=False)
         nav.selected_index = state["tab"]
 
         if state["tab"] == 0:
