@@ -210,6 +210,11 @@ def main(page: ft.Page):
     page.window_height = 800
     page.window_resizable = True
 
+    flet_version = getattr(ft, "__version__", "unknown")
+    debug_log(f"Flet version: {flet_version}")
+    if flet_version != "0.80.5":
+        debug_log("WARNING: This project is tested for Flet 0.80.5")
+
     state = {
         "logged_in": False,
         "tab": 0,
@@ -864,6 +869,10 @@ def main(page: ft.Page):
             add_is_on_sw.value = False
             dialog_ref = None
 
+            def cancel_add_device(_):
+                if dialog_ref is not None:
+                    close_dialog(dialog_ref)
+
             def on_save_click(_):
                 debug_log("Add device dialog: save clicked")
                 success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
@@ -879,7 +888,7 @@ def main(page: ft.Page):
                     controls=[add_name_tf, add_room_tf, add_is_on_sw],
                 ),
                 actions=[
-                    ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog_ref)),
+                    ft.TextButton("Отмена", on_click=cancel_add_device),
                     ft.ElevatedButton("Сохранить", on_click=on_save_click),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
