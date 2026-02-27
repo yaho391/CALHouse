@@ -10,6 +10,42 @@ USER_EMAIL = "user@smarthome.mtp"
 USER_ROLE = "Пользователь"
 API_BASE = "http://localhost:5000"
 
+INVALID_DEVICE_NAMES = {"on", "off", "вкл", "выкл"}
+DEVICE_TYPES = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Другое"]
+PROVIDER_LABELS = {
+    "mock": "Mock / Локальное (текущее API)",
+    "home_assistant": "Home Assistant",
+    "tuya": "Tuya",
+    "philips_hue": "Philips Hue",
+    "shelly": "Shelly",
+    "mqtt": "MQTT",
+}
+PROVIDER_FIELDS = {
+    "home_assistant": ["base_url", "long_lived_token", "entity_id"],
+    "tuya": ["access_id", "access_key", "device_id", "region"],
+    "philips_hue": ["bridge_ip", "username", "light_id"],
+    "shelly": ["device_ip", "cloud_token", "device_id"],
+    "mqtt": ["broker_url", "port", "username", "password", "topic"],
+}
+CONNECTION_FIELD_LABELS = {
+    "base_url": "Base URL",
+    "long_lived_token": "Long-lived token",
+    "entity_id": "Entity ID",
+    "access_id": "Access ID",
+    "access_key": "Access Key",
+    "device_id": "Device ID",
+    "region": "Region",
+    "bridge_ip": "Bridge IP",
+    "username": "Username / Token",
+    "light_id": "Light ID",
+    "device_ip": "Device IP",
+    "cloud_token": "Cloud token",
+    "broker_url": "Broker URL",
+    "port": "Port",
+    "password": "Password",
+    "topic": "Topic",
+}
+
 devices = [
     {
         "id": 1,
@@ -197,11 +233,20 @@ def toast(page: ft.Page, text: str):
     page.update()
 
 
+def debug_log(message: str):
+    print(f"[CALHouse UI] {message}")
+
+
 def main(page: ft.Page):
     page.title = "SmartHome UI"
     page.window_width = 1200
     page.window_height = 800
     page.window_resizable = True
+
+    flet_version = getattr(ft, "__version__", "unknown")
+    debug_log(f"Flet version: {flet_version}")
+    if flet_version != "0.80.5":
+        debug_log("WARNING: This project is tested for Flet 0.80.5")
 
     state = {
         "logged_in": False,
@@ -218,50 +263,146 @@ def main(page: ft.Page):
     device_items = [d.copy() for d in devices]
 
     def map_api_device(device: dict):
-        name = str(device.get("name", "Устройство"))
+        raw_id = int(device.get("id", 0))
+        name = str(device.get("name", "")).strip()
+        device_type = str(device.get("type", "")).strip()
+
+        if not name or name.lower() in INVALID_DEVICE_NAMES:
+            name = f"Устройство #{raw_id if raw_id > 0 else '?'}"
+
+        type_lower = device_type.lower()
         lname = name.lower()
-        if "термо" in lname or "климат" in lname:
-            icon = "thermostat"
-        elif "свет" in lname or "ламп" in lname:
+        if type_lower == "свет" or "свет" in lname or "ламп" in lname:
             icon = "light"
-        elif "камер" in lname:
+        elif type_lower == "климат" or "термо" in lname or "климат" in lname:
+            icon = "thermostat"
+        elif type_lower == "камера" or "камер" in lname:
             icon = "camera"
         else:
             icon = "energy"
 
         is_on = bool(device.get("isOn", False))
+        room = str(device.get("room", "")).strip() or "Комната не указана"
+
         return {
-            "id": int(device.get("id", 0)),
+            "id": raw_id,
             "name": name,
-            "room": str(device.get("room", "Неизвестно")),
-            "value": "ON" if is_on else "OFF",
+            "room": room,
+            "type": device_type or "Другое",
+            "value": "ВКЛ" if is_on else "ВЫКЛ",
             "status": "online" if is_on else "offline",
             "badge": None,
             "icon": icon,
             "trend": "flat",
+            "status_text": "Включено" if is_on else "Выключено",
         }
 
     def load_devices_from_api(show_error: bool = False):
         nonlocal device_items
+        debug_log(f"GET {API_BASE}/api/devices")
         try:
             response = requests.get(f"{API_BASE}/api/devices", timeout=5)
             response.raise_for_status()
             data = response.json()
+            debug_log(f"GET /api/devices -> {response.status_code}, items={len(data) if isinstance(data, list) else 'n/a'}")
             if isinstance(data, list):
                 device_items = [map_api_device(item) for item in data]
-        except requests.RequestException:
+        except requests.RequestException as ex:
+            debug_log(f"GET /api/devices failed: {ex}")
             if show_error:
                 toast(page, "API недоступен. Проверьте backend на http://localhost:5000")
 
     def toggle_device_via_api(device_id: int):
+        debug_log(f"Toggle click for device #{device_id}")
         try:
             response = requests.put(f"{API_BASE}/api/devices/{device_id}/toggle", timeout=5)
             response.raise_for_status()
+            debug_log(f"PUT /api/devices/{device_id}/toggle -> {response.status_code}")
             load_devices_from_api(show_error=True)
             toast(page, f"Устройство #{device_id} переключено")
             build_root()
-        except requests.RequestException:
+        except requests.RequestException as ex:
+            debug_log(f"PUT /api/devices/{device_id}/toggle failed: {ex}")
             toast(page, f"Не удалось переключить устройство #{device_id}")
+
+    def add_device_via_api(
+        name: str,
+        room: str,
+        is_on: bool = False,
+        device_type: str = "Другое",
+        provider: str = "mock",
+        connection: dict | None = None,
+    ):
+        connection = connection or {}
+        payload = {
+            "name": name.strip(),
+            "room": room.strip(),
+            "isOn": is_on,
+            "type": device_type,
+            "provider": provider,
+            "connection": connection,
+        }
+        debug_log(f"Create device payload: {payload}")
+
+        if not payload["name"] or not payload["room"] or not payload["type"]:
+            debug_log("Create device validation failed: empty name/room/type")
+            toast(page, "Введите название, комнату и тип")
+            return False
+
+        required_fields = PROVIDER_FIELDS.get(provider, []) if provider != "mock" else []
+        missing_fields = [key for key in required_fields if not str(connection.get(key, "")).strip()]
+        if missing_fields:
+            debug_log(f"Create device validation failed: missing connection fields {missing_fields}")
+            toast(page, "Заполните обязательные поля подключения")
+            return False
+
+        try:
+            debug_log(f"POST {API_BASE}/api/devices")
+            response = requests.post(f"{API_BASE}/api/devices", json=payload, timeout=5)
+            response.raise_for_status()
+            created = response.json()
+            debug_log(f"POST /api/devices -> {response.status_code}, response={created}")
+            load_devices_from_api(show_error=True)
+            toast(page, f"Устройство добавлено: #{created.get('id', '?')} {created.get('name', '')}")
+            build_root()
+            return True
+        except requests.RequestException as ex:
+            debug_log(f"POST /api/devices failed: {ex}")
+            toast(page, "Не удалось добавить устройство")
+            return False
+
+    def validate_connection_via_api(provider: str, connection: dict):
+        payload = {"provider": provider, "connection": connection}
+        debug_log(f"Validate connection payload: {payload}")
+        try:
+            response = requests.post(f"{API_BASE}/api/devices/validate-connection", json=payload, timeout=5)
+            if response.status_code == 404:
+                debug_log("POST /api/devices/validate-connection -> 404 (endpoint stub)")
+                toast(page, "Проверка подключения пока не реализована на backend")
+                return False
+            response.raise_for_status()
+            data = response.json() if response.text else {}
+            ok = bool(data.get("ok", True))
+            debug_log(f"POST /api/devices/validate-connection -> {response.status_code}, response={data}")
+            toast(page, "Подключение успешно" if ok else f"Ошибка подключения: {data.get('message', 'неизвестно')}")
+            return ok
+        except requests.RequestException as ex:
+            debug_log(f"POST /api/devices/validate-connection failed: {ex}")
+            toast(page, "Не удалось проверить подключение")
+            return False
+
+    def delete_device_via_api(device_id: int):
+        debug_log(f"Delete click for device #{device_id}")
+        try:
+            response = requests.delete(f"{API_BASE}/api/devices/{device_id}", timeout=5)
+            response.raise_for_status()
+            debug_log(f"DELETE /api/devices/{device_id} -> {response.status_code}")
+            load_devices_from_api(show_error=True)
+            toast(page, f"Устройство #{device_id} удалено")
+            build_root()
+        except requests.RequestException as ex:
+            debug_log(f"DELETE /api/devices/{device_id} failed: {ex}")
+            toast(page, f"Не удалось удалить устройство #{device_id}")
 
     # темная тема (единая палитра)
     def palette():
@@ -579,12 +720,12 @@ def main(page: ft.Page):
                             top_right,
                         ],
                     ),
-                    T(d["name"], size=16, weight=ft.FontWeight.BOLD),
+                    T(f"#{d['id']} · {d['name']}", size=16, weight=ft.FontWeight.BOLD),
                     TM(d["room"]),
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            T(d["value"], size=22, weight=ft.FontWeight.BOLD),
+                            T(d["status_text"], size=18, weight=ft.FontWeight.BOLD),
                             trend_icon(d["trend"]),
                         ],
                     ),
@@ -754,9 +895,7 @@ def main(page: ft.Page):
             value="Все типы",
             options=[
                 ft.dropdown.Option("Все типы"),
-                ft.dropdown.Option("Свет"),
-                ft.dropdown.Option("Климат"),
-                ft.dropdown.Option("Камера"),
+                *[ft.dropdown.Option(x) for x in DEVICE_TYPES],
             ],
             expand=True,
         )
@@ -780,13 +919,186 @@ def main(page: ft.Page):
         )
         seg_table = ft.OutlinedButton("Таблица", expand=True, on_click=lambda e: toast(page, "Пока макет"))
 
+        add_name_tf = themed_field(label="Название", hint_text="Например: Лампа IKEA")
+        add_room_tf = themed_field(label="Комната", hint_text="Например: Спальня")
+        add_type_dd = themed_dropdown(
+            label="Тип устройства",
+            value=DEVICE_TYPES[0],
+            options=[ft.dropdown.Option(x) for x in DEVICE_TYPES],
+        )
+        add_is_on_sw = ft.Switch(label="Включить сразу", value=False)
+
+        mode_group = ft.RadioGroup(
+            value="local",
+            content=ft.Row(
+                controls=[
+                    ft.Radio(value="local", label="Локальное устройство"),
+                    ft.Radio(value="real", label="Реальное устройство"),
+                ]
+            ),
+        )
+        provider_dd = themed_dropdown(
+            label="Источник / интеграция",
+            value="mock",
+            options=[ft.dropdown.Option(k, v) for k, v in PROVIDER_LABELS.items()],
+            visible=False,
+        )
+        connection_fields_column = ft.Column(spacing=10, visible=False)
+        connection_inputs: dict[str, ft.TextField] = {}
+
+        def update_connection_fields(provider_key: str):
+            debug_log(f"Update connection fields for provider={provider_key}")
+            connection_inputs.clear()
+            fields = PROVIDER_FIELDS.get(provider_key, [])
+            controls = []
+            for key in fields:
+                tf = themed_field(
+                    label=CONNECTION_FIELD_LABELS.get(key, key),
+                    hint_text=f"Введите {CONNECTION_FIELD_LABELS.get(key, key)}",
+                )
+                connection_inputs[key] = tf
+                controls.append(tf)
+            connection_fields_column.controls = controls
+            connection_fields_column.visible = bool(fields)
+
+        def collect_connection_values(provider_key: str):
+            fields = PROVIDER_FIELDS.get(provider_key, [])
+            return {key: ((connection_inputs.get(key).value if connection_inputs.get(key) else "") or "") for key in fields}
+
+        def validate_add_form(name: str, room: str, device_type: str, provider_key: str, connection: dict):
+            if not name.strip() or not room.strip() or not device_type.strip():
+                toast(page, "Заполните название, комнату и тип")
+                return False
+            if provider_key != "mock":
+                required = PROVIDER_FIELDS.get(provider_key, [])
+                missing = [k for k in required if not str(connection.get(k, "")).strip()]
+                if missing:
+                    toast(page, "Заполните обязательные поля подключения")
+                    debug_log(f"Validation failed: missing fields {missing}")
+                    return False
+            return True
+
+        def on_mode_change(_):
+            is_real_mode = mode_group.value == "real"
+            debug_log(f"Add device mode changed: {'real' if is_real_mode else 'local'}")
+            provider_dd.visible = is_real_mode
+            if not is_real_mode:
+                provider_dd.value = "mock"
+                connection_fields_column.visible = False
+                connection_fields_column.controls = []
+                connection_inputs.clear()
+            else:
+                if provider_dd.value == "mock":
+                    provider_dd.value = "home_assistant"
+                update_connection_fields(provider_dd.value)
+            page.update()
+
+        def on_provider_change(_):
+            debug_log(f"Add device provider changed: {provider_dd.value}")
+            update_connection_fields(provider_dd.value)
+            page.update()
+
+        def show_dialog(dialog):
+            if dialog not in page.overlay:
+                page.overlay.append(dialog)
+            page.open(dialog)
+            page.update()
+
+        def close_dialog(dialog):
+            page.close(dialog)
+            page.update()
+
+        def open_add_device_dialog(_):
+            debug_log("Add device button clicked")
+            add_name_tf.value = ""
+            add_room_tf.value = ""
+            add_type_dd.value = DEVICE_TYPES[0]
+            add_is_on_sw.value = False
+            mode_group.value = "local"
+            provider_dd.value = "mock"
+            provider_dd.visible = False
+            connection_fields_column.visible = False
+            connection_fields_column.controls = []
+            connection_inputs.clear()
+            dialog_ref = None
+
+            def cancel_add_device(_):
+                if dialog_ref is not None:
+                    close_dialog(dialog_ref)
+
+            def on_save_click(_):
+                debug_log("Add device dialog: save clicked")
+                provider_value = provider_dd.value if mode_group.value == "real" else "mock"
+                connection_data = collect_connection_values(provider_value)
+                debug_log(f"Add device form data: mode={mode_group.value}, provider={provider_value}, connection={connection_data}")
+                if not validate_add_form(add_name_tf.value or "", add_room_tf.value or "", add_type_dd.value or "", provider_value, connection_data):
+                    return
+                success = add_device_via_api(
+                    add_name_tf.value or "",
+                    add_room_tf.value or "",
+                    bool(add_is_on_sw.value),
+                    add_type_dd.value or "Другое",
+                    provider_value,
+                    connection_data if provider_value != "mock" else {},
+                )
+                if success and dialog_ref is not None:
+                    close_dialog(dialog_ref)
+
+            def on_test_connection_click(_):
+                provider_value = provider_dd.value if mode_group.value == "real" else "mock"
+                debug_log(f"Test connection click: provider={provider_value}")
+                if provider_value == "mock":
+                    toast(page, "Локальное устройство не требует проверки подключения")
+                    return
+                connection_data = collect_connection_values(provider_value)
+                if not validate_add_form(
+                    add_name_tf.value or "tmp",
+                    add_room_tf.value or "tmp",
+                    add_type_dd.value or DEVICE_TYPES[0],
+                    provider_value,
+                    connection_data,
+                ):
+                    return
+                validate_connection_via_api(provider_value, connection_data)
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[
+                        add_name_tf,
+                        add_room_tf,
+                        add_type_dd,
+                        mode_group,
+                        provider_dd,
+                        connection_fields_column,
+                        add_is_on_sw,
+                    ],
+                ),
+                actions=[
+                    ft.OutlinedButton("Тест подключения", on_click=on_test_connection_click),
+                    ft.TextButton("Отмена", on_click=cancel_add_device),
+                    ft.ElevatedButton("Сохранить", on_click=on_save_click),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+
+            mode_group.on_change = on_mode_change
+            provider_dd.on_change = on_provider_change
+
+            dialog_ref = dialog
+            show_dialog(dialog)
+            debug_log(f"Add device dialog opened; overlay_size={len(page.overlay)}; open={dialog.open}")
+
         add_btn = ft.ElevatedButton(
             "Добавить устройство",
             icon=ft.Icons.ADD,
             bgcolor=_c("#0b1020"),
             color=_c("#ffffff"),
             height=44,
-            on_click=lambda e: toast(page, "Добавление (макет)"),
+            on_click=open_add_device_dialog,
         )
         refresh_btn = ft.OutlinedButton(
             "Обновить",
@@ -827,6 +1139,7 @@ def main(page: ft.Page):
                                             controls=[
                                                 T(d["name"], size=16, weight=ft.FontWeight.BOLD),
                                                 TM(d["room"], size=12),
+                                                TM(f"Тип: {d.get('type', 'Другое')}", size=12),
                                             ],
                                         ),
                                     ],
@@ -839,7 +1152,8 @@ def main(page: ft.Page):
                                 ),
                             ],
                         ),
-                        T(d["value"], size=28, weight=ft.FontWeight.BOLD),
+                        T(f"Устройство #{d['id']}", size=13, weight=ft.FontWeight.W_600, color=C("MUTED")),
+                        T(d["status_text"], size=24, weight=ft.FontWeight.BOLD),
                         TM("Обновлено: 2026-01-23 09:15", size=12),
                         ft.Row(
                             spacing=10,
@@ -849,6 +1163,11 @@ def main(page: ft.Page):
                                     icon=ft.Icons.POWER_SETTINGS_NEW,
                                     expand=True,
                                     on_click=lambda e, device_id=d["id"]: toggle_device_via_api(device_id),
+                                ),
+                                ft.OutlinedButton(
+                                    "Удалить",
+                                    icon=ft.Icons.DELETE_OUTLINE,
+                                    on_click=lambda e, device_id=d["id"]: delete_device_via_api(device_id),
                                 ),
                             ],
                         ),
@@ -1252,7 +1571,6 @@ def main(page: ft.Page):
 
         page.bgcolor = C("BG")
         page.navigation_bar = nav
-        load_devices_from_api(show_error=False)
         nav.selected_index = state["tab"]
 
         if state["tab"] == 0:
