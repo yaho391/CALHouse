@@ -1,6 +1,7 @@
 import flet as ft
 import requests
 from datetime import datetime, timedelta
+import traceback
 
 # пока что надо
 import warnings
@@ -213,6 +214,7 @@ def main(page: ft.Page):
         "logged_in": False,
         "tab": 0,
         "history_mode": "list",  # list/table
+        "show_add_form": False,
         "dark": False,
         "notif_push": True,
         "notif_email": True,
@@ -902,6 +904,30 @@ def main(page: ft.Page):
             height=44,
         )
 
+        add_form = ft.Container(
+            visible=state.get("show_add_form", False),
+            padding=16,
+            border_radius=16,
+            bgcolor=C("CARD"),
+            border=ft.border.all(1, C("BORDER")),
+            content=ft.Column(
+                spacing=10,
+                controls=[
+                    T("Новое устройство", size=18, weight=ft.FontWeight.BOLD),
+                    add_name_tf,
+                    add_room_tf,
+                    add_is_on_sw,
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.END,
+                        controls=[
+                            ft.TextButton("Отмена", on_click=cancel_add_device),
+                            ft.ElevatedButton("Сохранить", on_click=submit_add_device),
+                        ],
+                    ),
+                ],
+            ),
+        )
+
         def device_row(d):
             badge_text = "Онлайн" if d["status"] == "online" else ("Предупреждение" if d["status"] == "warning" else "Оффлайн")
             badge_bg = _c("#dcfce7") if d["status"] == "online" else (_c("#fef3c7") if d["status"] == "warning" else _c("#e2e8f0"))
@@ -980,6 +1006,7 @@ def main(page: ft.Page):
                 ft.Row(spacing=12, controls=[dd_type, dd_status]),
                 ft.Row(spacing=12, controls=[seg_grid, seg_table]),
                 ft.Row(spacing=12, controls=[add_btn, refresh_btn]),
+                add_form,
                 *[device_row(d) for d in device_items],
                 ft.Container(height=10),
             ],
@@ -1350,6 +1377,7 @@ def main(page: ft.Page):
     def do_logout():
         state["logged_in"] = False
         state["tab"] = 0
+        state["show_add_form"] = False
         build_root()
 
     def build_root():
