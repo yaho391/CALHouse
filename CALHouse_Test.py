@@ -1,6 +1,7 @@
 import flet as ft
 import requests
 from datetime import datetime, timedelta
+import traceback
 
 # пока что надо
 import warnings
