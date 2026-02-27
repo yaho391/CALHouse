@@ -130,7 +130,6 @@ curl.exe -X DELETE http://localhost:5000/api/devices/1
 ```
 
 
-
 ## Типовые ошибки и что делать
 
 1. **404 на `http://localhost:5000/`**
