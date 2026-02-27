@@ -847,25 +847,47 @@ def main(page: ft.Page):
         add_room_tf = themed_field(label="Комната", hint_text="Например: Спальня")
         add_is_on_sw = ft.Switch(label="Включить сразу", value=False)
 
+        def show_dialog(dialog):
+            if dialog not in page.overlay:
+                page.overlay.append(dialog)
+            page.open(dialog)
+            page.update()
+
+        def close_dialog(dialog):
+            page.close(dialog)
+            page.update()
+
         def open_add_device_dialog(_):
             debug_log("Add device button clicked")
             add_name_tf.value = ""
             add_room_tf.value = ""
             add_is_on_sw.value = False
-            state["show_add_form"] = True
-            debug_log("Add device form opened")
-            build_root()
+            dialog_ref = None
 
-        def cancel_add_device(_):
-            state["show_add_form"] = False
-            debug_log("Add device form cancelled")
-            build_root()
+            def on_save_click(_):
+                debug_log("Add device dialog: save clicked")
+                success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
+                if success and dialog_ref is not None:
+                    close_dialog(dialog_ref)
 
-        def submit_add_device(_):
-            debug_log("Add device form: save clicked")
-            success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
-            if success:
-                state["show_add_form"] = False
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[add_name_tf, add_room_tf, add_is_on_sw],
+                ),
+                actions=[
+                    ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog_ref)),
+                    ft.ElevatedButton("Сохранить", on_click=on_save_click),
+                ],
+                actions_alignment=ft.MainAxisAlignment.END,
+            )
+
+            dialog_ref = dialog
+            show_dialog(dialog)
+            debug_log(f"Add device dialog opened; overlay_size={len(page.overlay)}; open={dialog.open}")
 
         add_btn = ft.ElevatedButton(
             "Добавить устройство",
