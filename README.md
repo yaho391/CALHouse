@@ -41,6 +41,19 @@ API запускается на `http://localhost:5000`.
 
 ## Запуск frontend
 
+создание виртуального окружения
+```bash
+cd "/home/glavniy/Рабочий стол/CALHouse-main"
+sudo apt update
+sudo apt install -y python3-venv
+
+python3 -m venv .venv
+source .venv/bin/activate
+
+python -m pip install --upgrade pip
+pip install flet requests
+```
+
 ```bash
 pip install flet requests
 python CALHouse_Test.py
