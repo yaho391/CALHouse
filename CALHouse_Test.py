@@ -12,6 +12,40 @@ USER_ROLE = "Пользователь"
 API_BASE = "http://localhost:5000"
 
 INVALID_DEVICE_NAMES = {"on", "off", "вкл", "выкл"}
+DEVICE_TYPES = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Другое"]
+PROVIDER_LABELS = {
+    "mock": "Mock / Локальное (текущее API)",
+    "home_assistant": "Home Assistant",
+    "tuya": "Tuya",
+    "philips_hue": "Philips Hue",
+    "shelly": "Shelly",
+    "mqtt": "MQTT",
+}
+PROVIDER_FIELDS = {
+    "home_assistant": ["base_url", "long_lived_token", "entity_id"],
+    "tuya": ["access_id", "access_key", "device_id", "region"],
+    "philips_hue": ["bridge_ip", "username", "light_id"],
+    "shelly": ["device_ip", "cloud_token", "device_id"],
+    "mqtt": ["broker_url", "port", "username", "password", "topic"],
+}
+CONNECTION_FIELD_LABELS = {
+    "base_url": "Base URL",
+    "long_lived_token": "Long-lived token",
+    "entity_id": "Entity ID",
+    "access_id": "Access ID",
+    "access_key": "Access Key",
+    "device_id": "Device ID",
+    "region": "Region",
+    "bridge_ip": "Bridge IP",
+    "username": "Username / Token",
+    "light_id": "Light ID",
+    "device_ip": "Device IP",
+    "cloud_token": "Cloud token",
+    "broker_url": "Broker URL",
+    "port": "Port",
+    "password": "Password",
+    "topic": "Topic",
+}
 
 devices = [
     {
@@ -233,16 +267,18 @@ def main(page: ft.Page):
     def map_api_device(device: dict):
         raw_id = int(device.get("id", 0))
         name = str(device.get("name", "")).strip()
+        device_type = str(device.get("type", "")).strip()
 
         if not name or name.lower() in INVALID_DEVICE_NAMES:
             name = f"Устройство #{raw_id if raw_id > 0 else '?'}"
 
+        type_lower = device_type.lower()
         lname = name.lower()
-        if "термо" in lname or "климат" in lname:
-            icon = "thermostat"
-        elif "свет" in lname or "ламп" in lname:
+        if type_lower == "свет" or "свет" in lname or "ламп" in lname:
             icon = "light"
-        elif "камер" in lname:
+        elif type_lower == "климат" or "термо" in lname or "климат" in lname:
+            icon = "thermostat"
+        elif type_lower == "камера" or "камер" in lname:
             icon = "camera"
         else:
             icon = "energy"
@@ -254,6 +290,7 @@ def main(page: ft.Page):
             "id": raw_id,
             "name": name,
             "room": room,
+            "type": device_type or "Другое",
             "value": "ВКЛ" if is_on else "ВЫКЛ",
             "status": "online" if is_on else "offline",
             "badge": None,
@@ -290,17 +327,35 @@ def main(page: ft.Page):
             debug_log(f"PUT /api/devices/{device_id}/toggle failed: {ex}")
             toast(page, f"Не удалось переключить устройство #{device_id}")
 
-    def add_device_via_api(name: str, room: str, is_on: bool = False):
+    def add_device_via_api(
+        name: str,
+        room: str,
+        is_on: bool = False,
+        device_type: str = "Другое",
+        provider: str = "mock",
+        connection: dict | None = None,
+    ):
+        connection = connection or {}
         payload = {
             "name": name.strip(),
             "room": room.strip(),
             "isOn": is_on,
+            "type": device_type,
+            "provider": provider,
+            "connection": connection,
         }
         debug_log(f"Create device payload: {payload}")
 
-        if not payload["name"] or not payload["room"]:
-            debug_log("Create device validation failed: empty name/room")
-            toast(page, "Введите название и комнату")
+        if not payload["name"] or not payload["room"] or not payload["type"]:
+            debug_log("Create device validation failed: empty name/room/type")
+            toast(page, "Введите название, комнату и тип")
+            return False
+
+        required_fields = PROVIDER_FIELDS.get(provider, []) if provider != "mock" else []
+        missing_fields = [key for key in required_fields if not str(connection.get(key, "")).strip()]
+        if missing_fields:
+            debug_log(f"Create device validation failed: missing connection fields {missing_fields}")
+            toast(page, "Заполните обязательные поля подключения")
             return False
 
         try:
@@ -316,6 +371,26 @@ def main(page: ft.Page):
         except requests.RequestException as ex:
             debug_log(f"POST /api/devices failed: {ex}")
             toast(page, "Не удалось добавить устройство")
+            return False
+
+    def validate_connection_via_api(provider: str, connection: dict):
+        payload = {"provider": provider, "connection": connection}
+        debug_log(f"Validate connection payload: {payload}")
+        try:
+            response = requests.post(f"{API_BASE}/api/devices/validate-connection", json=payload, timeout=5)
+            if response.status_code == 404:
+                debug_log("POST /api/devices/validate-connection -> 404 (endpoint stub)")
+                toast(page, "Проверка подключения пока не реализована на backend")
+                return False
+            response.raise_for_status()
+            data = response.json() if response.text else {}
+            ok = bool(data.get("ok", True))
+            debug_log(f"POST /api/devices/validate-connection -> {response.status_code}, response={data}")
+            toast(page, "Подключение успешно" if ok else f"Ошибка подключения: {data.get('message', 'неизвестно')}")
+            return ok
+        except requests.RequestException as ex:
+            debug_log(f"POST /api/devices/validate-connection failed: {ex}")
+            toast(page, "Не удалось проверить подключение")
             return False
 
     def delete_device_via_api(device_id: int):
@@ -822,9 +897,7 @@ def main(page: ft.Page):
             value="Все типы",
             options=[
                 ft.dropdown.Option("Все типы"),
-                ft.dropdown.Option("Свет"),
-                ft.dropdown.Option("Климат"),
-                ft.dropdown.Option("Камера"),
+                *[ft.dropdown.Option(x) for x in DEVICE_TYPES],
             ],
             expand=True,
         )
@@ -850,7 +923,82 @@ def main(page: ft.Page):
 
         add_name_tf = themed_field(label="Название", hint_text="Например: Лампа IKEA")
         add_room_tf = themed_field(label="Комната", hint_text="Например: Спальня")
+        add_type_dd = themed_dropdown(
+            label="Тип устройства",
+            value=DEVICE_TYPES[0],
+            options=[ft.dropdown.Option(x) for x in DEVICE_TYPES],
+        )
         add_is_on_sw = ft.Switch(label="Включить сразу", value=False)
+
+        mode_group = ft.RadioGroup(
+            value="local",
+            content=ft.Row(
+                controls=[
+                    ft.Radio(value="local", label="Локальное устройство"),
+                    ft.Radio(value="real", label="Реальное устройство"),
+                ]
+            ),
+        )
+        provider_dd = themed_dropdown(
+            label="Источник / интеграция",
+            value="mock",
+            options=[ft.dropdown.Option(k, v) for k, v in PROVIDER_LABELS.items()],
+            visible=False,
+        )
+        connection_fields_column = ft.Column(spacing=10, visible=False)
+        connection_inputs: dict[str, ft.TextField] = {}
+
+        def update_connection_fields(provider_key: str):
+            debug_log(f"Update connection fields for provider={provider_key}")
+            connection_inputs.clear()
+            fields = PROVIDER_FIELDS.get(provider_key, [])
+            controls = []
+            for key in fields:
+                tf = themed_field(
+                    label=CONNECTION_FIELD_LABELS.get(key, key),
+                    hint_text=f"Введите {CONNECTION_FIELD_LABELS.get(key, key)}",
+                )
+                connection_inputs[key] = tf
+                controls.append(tf)
+            connection_fields_column.controls = controls
+            connection_fields_column.visible = bool(fields)
+
+        def collect_connection_values(provider_key: str):
+            fields = PROVIDER_FIELDS.get(provider_key, [])
+            return {key: ((connection_inputs.get(key).value if connection_inputs.get(key) else "") or "") for key in fields}
+
+        def validate_add_form(name: str, room: str, device_type: str, provider_key: str, connection: dict):
+            if not name.strip() or not room.strip() or not device_type.strip():
+                toast(page, "Заполните название, комнату и тип")
+                return False
+            if provider_key != "mock":
+                required = PROVIDER_FIELDS.get(provider_key, [])
+                missing = [k for k in required if not str(connection.get(k, "")).strip()]
+                if missing:
+                    toast(page, "Заполните обязательные поля подключения")
+                    debug_log(f"Validation failed: missing fields {missing}")
+                    return False
+            return True
+
+        def on_mode_change(_):
+            is_real_mode = mode_group.value == "real"
+            debug_log(f"Add device mode changed: {'real' if is_real_mode else 'local'}")
+            provider_dd.visible = is_real_mode
+            if not is_real_mode:
+                provider_dd.value = "mock"
+                connection_fields_column.visible = False
+                connection_fields_column.controls = []
+                connection_inputs.clear()
+            else:
+                if provider_dd.value == "mock":
+                    provider_dd.value = "home_assistant"
+                update_connection_fields(provider_dd.value)
+            page.update()
+
+        def on_provider_change(_):
+            debug_log(f"Add device provider changed: {provider_dd.value}")
+            update_connection_fields(provider_dd.value)
+            page.update()
 
         def show_dialog(dialog):
             if dialog not in page.overlay:
@@ -866,7 +1014,14 @@ def main(page: ft.Page):
             debug_log("Add device button clicked")
             add_name_tf.value = ""
             add_room_tf.value = ""
+            add_type_dd.value = DEVICE_TYPES[0]
             add_is_on_sw.value = False
+            mode_group.value = "local"
+            provider_dd.value = "mock"
+            provider_dd.visible = False
+            connection_fields_column.visible = False
+            connection_fields_column.controls = []
+            connection_inputs.clear()
             dialog_ref = None
 
             def cancel_add_device(_):
@@ -875,9 +1030,38 @@ def main(page: ft.Page):
 
             def on_save_click(_):
                 debug_log("Add device dialog: save clicked")
-                success = add_device_via_api(add_name_tf.value or "", add_room_tf.value or "", bool(add_is_on_sw.value))
+                provider_value = provider_dd.value if mode_group.value == "real" else "mock"
+                connection_data = collect_connection_values(provider_value)
+                debug_log(f"Add device form data: mode={mode_group.value}, provider={provider_value}, connection={connection_data}")
+                if not validate_add_form(add_name_tf.value or "", add_room_tf.value or "", add_type_dd.value or "", provider_value, connection_data):
+                    return
+                success = add_device_via_api(
+                    add_name_tf.value or "",
+                    add_room_tf.value or "",
+                    bool(add_is_on_sw.value),
+                    add_type_dd.value or "Другое",
+                    provider_value,
+                    connection_data if provider_value != "mock" else {},
+                )
                 if success and dialog_ref is not None:
                     close_dialog(dialog_ref)
+
+            def on_test_connection_click(_):
+                provider_value = provider_dd.value if mode_group.value == "real" else "mock"
+                debug_log(f"Test connection click: provider={provider_value}")
+                if provider_value == "mock":
+                    toast(page, "Локальное устройство не требует проверки подключения")
+                    return
+                connection_data = collect_connection_values(provider_value)
+                if not validate_add_form(
+                    add_name_tf.value or "tmp",
+                    add_room_tf.value or "tmp",
+                    add_type_dd.value or DEVICE_TYPES[0],
+                    provider_value,
+                    connection_data,
+                ):
+                    return
+                validate_connection_via_api(provider_value, connection_data)
 
             dialog = ft.AlertDialog(
                 modal=True,
@@ -885,14 +1069,26 @@ def main(page: ft.Page):
                 content=ft.Column(
                     tight=True,
                     spacing=10,
-                    controls=[add_name_tf, add_room_tf, add_is_on_sw],
+                    controls=[
+                        add_name_tf,
+                        add_room_tf,
+                        add_type_dd,
+                        mode_group,
+                        provider_dd,
+                        connection_fields_column,
+                        add_is_on_sw,
+                    ],
                 ),
                 actions=[
+                    ft.OutlinedButton("Тест подключения", on_click=on_test_connection_click),
                     ft.TextButton("Отмена", on_click=cancel_add_device),
                     ft.ElevatedButton("Сохранить", on_click=on_save_click),
                 ],
                 actions_alignment=ft.MainAxisAlignment.END,
             )
+
+            mode_group.on_change = on_mode_change
+            provider_dd.on_change = on_provider_change
 
             dialog_ref = dialog
             show_dialog(dialog)
@@ -969,6 +1165,7 @@ def main(page: ft.Page):
                                             controls=[
                                                 T(d["name"], size=16, weight=ft.FontWeight.BOLD),
                                                 TM(d["room"], size=12),
+                                                TM(f"Тип: {d.get('type', 'Другое')}", size=12),
                                             ],
                                         ),
                                     ],
