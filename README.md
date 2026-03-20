@@ -8,6 +8,33 @@
 4. `PUT /api/devices/{id}/toggle` — переключить устройство ON/OFF.
 5. `DELETE /api/devices/{id}` — удалить устройство.
 
+
+## Новые функции (backend на C#)
+
+Реализованы полностью рабочие функции:
+
+- **Комнаты и зоны**: CRUD комнат, назначение устройства в комнату, список устройств в комнате.
+- **Сценарии (сцены)**: CRUD сценариев, ручной запуск сцены, журнал выполнений со статусом.
+
+### Дополнительные endpoints
+
+- `GET /api/rooms`
+- `GET /api/rooms/{id}`
+- `POST /api/rooms`
+- `PUT /api/rooms/{id}`
+- `DELETE /api/rooms/{id}`
+- `GET /api/rooms/{id}/devices`
+- `PUT /api/devices/{id}/room`
+- `GET /api/scenes`
+- `GET /api/scenes/{id}`
+- `POST /api/scenes`
+- `PUT /api/scenes/{id}`
+- `DELETE /api/scenes/{id}`
+- `POST /api/scenes/{id}/run`
+- `GET /api/scenes/executions`
+
+> Python в этом проекте используется только для UI (`CALHouse_Test.py`). Backend реализован на C#.
+
 ## Структура
 
 - `backend/CalHouse.Api` — ASP.NET Core Minimal API
