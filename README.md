@@ -9,7 +9,7 @@
 5. `DELETE /api/devices/{id}` — удалить устройство.
 
 
-## Новые функции (готово в C# и Python backend)
+## Новые функции (backend на C#)
 
 Реализованы полностью рабочие функции:
 
@@ -33,18 +33,7 @@
 - `POST /api/scenes/{id}/run`
 - `GET /api/scenes/executions`
 
-### Запуск Python backend (FastAPI)
-
-```bash
-cd python_api
-python -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-После запуска доступны маршруты и swagger:
-- `http://localhost:8000/docs`
+> Python в этом проекте используется только для UI (`CALHouse_Test.py`). Backend реализован на C#.
 
 ## Структура
 
