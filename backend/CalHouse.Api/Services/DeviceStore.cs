@@ -47,6 +47,16 @@ public class DeviceStore
         }
     }
 
+    public IReadOnlyList<Device> GetDevicesByRoom(string roomName)
+    {
+        lock (_sync)
+        {
+            return ReadDevices()
+                .Where(d => string.Equals(d.Room, roomName, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+    }
+
     public Device? GetDevice(int id)
     {
         lock (_sync)
@@ -77,6 +87,52 @@ public class DeviceStore
             _logger.LogInformation("Device {DeviceId} added: {Name} ({Room})", device.Id, device.Name, device.Room);
 
             return device;
+        }
+    }
+
+    public Device? ReassignDeviceRoom(int id, string room)
+    {
+        lock (_sync)
+        {
+            var devices = ReadDevices();
+            var device = devices.FirstOrDefault(d => d.Id == id);
+            if (device is null)
+            {
+                return null;
+            }
+
+            device.Room = room.Trim();
+            SaveDevices(devices);
+            _logger.LogInformation("Device {DeviceId} moved to room {Room}", device.Id, device.Room);
+            return device;
+        }
+    }
+
+    public int CountDevicesInRoom(string roomName)
+    {
+        lock (_sync)
+        {
+            return ReadDevices().Count(d => string.Equals(d.Room, roomName, StringComparison.OrdinalIgnoreCase));
+        }
+    }
+
+    public void RenameRoomForDevices(string oldRoomName, string newRoomName)
+    {
+        lock (_sync)
+        {
+            var devices = ReadDevices();
+            var touched = false;
+
+            foreach (var device in devices.Where(d => string.Equals(d.Room, oldRoomName, StringComparison.OrdinalIgnoreCase)))
+            {
+                device.Room = newRoomName.Trim();
+                touched = true;
+            }
+
+            if (touched)
+            {
+                SaveDevices(devices);
+            }
         }
     }
 
@@ -118,6 +174,23 @@ public class DeviceStore
 
             _logger.LogInformation("Device {DeviceId} toggled to {State}", device.Id, device.IsOn ? "ON" : "OFF");
 
+            return device;
+        }
+    }
+
+    public Device? SetDeviceState(int id, bool isOn)
+    {
+        lock (_sync)
+        {
+            var devices = ReadDevices();
+            var device = devices.FirstOrDefault(d => d.Id == id);
+            if (device is null)
+            {
+                return null;
+            }
+
+            device.IsOn = isOn;
+            SaveDevices(devices);
             return device;
         }
     }
