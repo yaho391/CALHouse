@@ -1,266 +1,199 @@
-# SmartHome (CALHouse) — API контракт (MVP)
+# CALHouse / Система управления умным домом
 
-Этот документ — **договор** между двумя частями проекта:
+В проекте теперь есть полноценная связка:
 
-- **Backend (C# Web API)**: хранит данные, меняет состояния устройств, пишет логи.
-- **UI (Python)**: показывает экраны и отправляет команды в backend.
+- **backend**: `backend/CalHouse.Api` — ASP.NET Core Minimal API (`net8.0`)
+- **frontend**: `CALHouse_Test.py` — рабочий интерфейс на **Flet 0.80.5**
+- **хранилище**: локальная **SQLite** БД `backend/CalHouse.Api/App_Data/calhouse.db`
+- **совместимость**: файл `backend/CalHouse.Api/App_Data/devices.json` сохраняется и автоматически синхронизируется как legacy-слой
 
-Пока **авторизация — заглушка** (не используем токены). Позже добавим `/auth/login`.
-
----
-
-## 0) Общие правила
-
-**Base URL:** `http://localhost:5000/api`  
-**Формат:** JSON (`application/json`)  
-**Время:** ISO 8601 (например: `2026-01-30T12:00:00Z`)
-
-### Ошибки (единый формат)
-Backend возвращает ошибки так:
-
-```json
-{ "error": "text", "code": "SOME_CODE" }
-```
-
-Рекомендуемые HTTP-коды:
-- `200 OK` — успешный ответ
-- `201 Created` — создано
-- `204 No Content` — удалено/без тела
-- `400 Bad Request` — неверные данные
-- `404 Not Found` — не найдено
-- `409 Conflict` — конфликт (например, комнату нельзя удалить, если в ней есть устройства)
-- `500 Internal Server Error` — ошибка сервера
+Также в архив добавлена папка `legacy_snapshots/` с копиями исходных ключевых файлов до расширения проекта.
 
 ---
 
-## 1) Rooms (Комнаты)
+## Что реализовано
 
-### 1.1 Получить список комнат
-`GET /rooms`
+### Устройства
+- `GET /api/devices`
+- `GET /api/devices/{id}`
+- `POST /api/devices`
+- `PUT /api/devices/{id}`
+- `PUT /api/devices/{id}/toggle`
+- `PUT /api/devices/{id}/room`
+- `DELETE /api/devices/{id}`
+- `POST /api/devices/validate-connection`
 
-**Response 200**
-```json
-[
-  { "id": 1, "name": "Гостиная" },
-  { "id": 2, "name": "Спальня" }
-]
-```
+### Комнаты и зоны
+- `GET /api/rooms`
+- `GET /api/rooms/{id}`
+- `GET /api/rooms/{id}/devices`
+- `POST /api/rooms`
+- `PUT /api/rooms/{id}`
+- `DELETE /api/rooms/{id}`
 
-### 1.2 Создать комнату
-`POST /rooms`
+### Сценарии (сцены)
+- `GET /api/scenes`
+- `GET /api/scenes/{id}`
+- `GET /api/scenes/{id}/runs`
+- `POST /api/scenes`
+- `PUT /api/scenes/{id}`
+- `DELETE /api/scenes/{id}`
+- `POST /api/scenes/{id}/run`
 
-**Request**
-```json
-{ "name": "Кухня" }
-```
-
-**Response 201**
-```json
-{ "id": 3, "name": "Кухня" }
-```
-
-### 1.3 Переименовать комнату
-`PUT /rooms/{roomId}`
-
-**Request**
-```json
-{ "name": "Кухня (1 этаж)" }
-```
-
-**Response 200**
-```json
-{ "id": 3, "name": "Кухня (1 этаж)" }
-```
-
-### 1.4 Удалить комнату
-`DELETE /rooms/{roomId}`
-
-**Response 204** (тело пустое)
-
-**Response 409** (если в комнате есть устройства)
-```json
-{ "error": "Room has devices", "code": "ROOM_NOT_EMPTY" }
-```
+### Логи
+- `GET /api/logs?limit=50`
 
 ---
 
-## 2) Devices (Устройства)
+## Как работает хранение данных
 
-### 2.1 Получить список устройств (с фильтром по комнате)
-`GET /devices?roomId=1`
+Вместо тестового JSON-only слоя backend теперь использует локальную SQLite БД.
 
-**Response 200**
-```json
-[
-  {
-    "id": 10,
-    "roomId": 1,
-    "name": "Люстра",
-    "type": "light",
-    "protocol": "emulator",
-    "address": "home/living/light1",
-    "isOnline": true,
-    "state": { "power": true, "brightness": 70 },
-    "updatedAt": "2026-01-30T12:00:00Z"
-  }
-]
-```
+Таблицы:
+- `Rooms`
+- `Devices`
+- `Scenes`
+- `SceneActions`
+- `SceneRuns`
+- `EventLogs`
 
-> `state` — универсальный JSON. Для лампы: `power/brightness`, для термостата: `temperature/mode` и т.д.
+При первом запуске backend автоматически:
+1. создаёт `calhouse.db`,
+2. переносит стартовые устройства из старого `devices.json`,
+3. дальше работает уже через SQLite.
 
-### 2.2 Создать устройство
-`POST /devices`
-
-**Request**
-```json
-{
-  "roomId": 1,
-  "name": "Розетка TV",
-  "type": "socket",
-  "protocol": "mqtt",
-  "address": "home/living/socket_tv"
-}
-```
-
-**Response 201**
-```json
-{
-  "id": 11,
-  "roomId": 1,
-  "name": "Розетка TV",
-  "type": "socket",
-  "protocol": "mqtt",
-  "address": "home/living/socket_tv",
-  "isOnline": false,
-  "state": { "power": false },
-  "updatedAt": "2026-01-30T12:00:00Z"
-}
-```
-
-### 2.3 Обновить устройство (имя/комната/адрес)
-`PUT /devices/{deviceId}`
-
-**Request**
-```json
-{ "name": "TV Socket", "roomId": 2, "address": "home/bed/socket_tv" }
-```
-
-**Response 200**
-```json
-{
-  "id": 11,
-  "roomId": 2,
-  "name": "TV Socket",
-  "type": "socket",
-  "protocol": "mqtt",
-  "address": "home/bed/socket_tv",
-  "isOnline": false,
-  "state": { "power": false },
-  "updatedAt": "2026-01-30T12:10:00Z"
-}
-```
-
-### 2.4 Удалить устройство
-`DELETE /devices/{deviceId}`
-
-**Response 204**
-
-### 2.5 Toggle (переключить power) — MVP
-`POST /devices/{deviceId}/toggle`
-
-**Response 200**
-```json
-{
-  "id": 10,
-  "state": { "power": false, "brightness": 70 },
-  "updatedAt": "2026-01-30T12:01:00Z"
-}
-```
-
-### 2.6 Установить состояние (универсально)
-`POST /devices/{deviceId}/state`
-
-**Request**
-```json
-{ "power": true, "brightness": 40 }
-```
-
-**Response 200**
-```json
-{
-  "id": 10,
-  "state": { "power": true, "brightness": 40 },
-  "updatedAt": "2026-01-30T12:02:00Z"
-}
-```
+После операций с устройствами legacy-файл `devices.json` автоматически обновляется, чтобы совместимость с предыдущей структурой не потерялась.
 
 ---
 
-## 3) Logs (Журнал событий)
+## Требования
 
-### 3.1 Получить логи
-`GET /logs?severity=info&limit=50`
-
-**Response 200**
-```json
-[
-  {
-    "id": 500,
-    "ts": "2026-01-30T12:02:10Z",
-    "severity": "info",
-    "source": "ui",
-    "eventType": "DEVICE_STATE_CHANGED",
-    "message": "User toggled device",
-    "userId": null,
-    "deviceId": 10
-  }
-]
-```
-
-> Пока `userId` может быть `null` (потому что auth заглушка). Позже подставим реального пользователя.
+- **.NET SDK 8.0+**
+- **Python 3.10+**
+- `pip`
 
 ---
 
-## 4) Auth (пока заглушка — НЕ делаем)
+## Запуск backend
 
-Когда дойдёшь до авторизации, добавим:
-
-- `POST /auth/login` → вернёт `token`
-- все остальные запросы будут требовать заголовок:  
-  `Authorization: Bearer <token>`
-
----
-
-## 5) Как использовать этот контракт (для новичка)
-
-### Что ты делаешь первым
-1. **Делаешь backend (C#)** так, чтобы эндпоинты из этого документа реально работали.  
-2. Проверяешь их через **Swagger** или **curl**.  
-3. Только потом подключаешь **Python UI**, который вызывает эти URL.
-
-### Мини-проверка через браузер/Swagger
-- Запусти backend: `dotnet run`
-- Открой Swagger: `http://localhost:5000/swagger`
-- Попробуй:
-  - `GET /api/rooms`
-  - `POST /api/rooms` (создать)
-  - `GET /api/devices?roomId=1`
-  - `POST /api/devices/{id}/toggle`
-  - `GET /api/logs?limit=50`
-
-### Мини-проверка через curl (если надо)
 ```bash
-curl -s http://localhost:5000/api/rooms
+cd backend/CalHouse.Api
+dotnet restore
+dotnet run --urls "http://localhost:5000"
+```
+
+После запуска доступны:
+- `GET /`
+- `GET /swagger` (в Development)
+- все маршруты из `/api/...`
+
+---
+
+## Запуск frontend
+
+```bash
+pip install "flet==0.80.5" requests
+python CALHouse_Test.py
+```
+
+Или через виртуальное окружение:
+
+```bash
+python -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+# .venv\Scripts\activate   # Windows
+pip install "flet==0.80.5" requests
+python CALHouse_Test.py
+```
+
+В UI доступны вкладки:
+- Главная
+- Устройства
+- Комнаты
+- Сценарии
+- История
+- Настройки
+
+---
+
+## Примеры запросов
+
+### Создать комнату
+```json
+POST /api/rooms
+{
+  "name": "Спальня",
+  "zone": "Второй этаж"
+}
+```
+
+### Создать устройство
+```json
+POST /api/devices
+{
+  "name": "Лампа у кровати",
+  "room": "Спальня",
+  "isOn": false,
+  "type": "Свет",
+  "provider": "mock",
+  "connection": {}
+}
+```
+
+### Перенести устройство в другую комнату
+```json
+PUT /api/devices/5/room
+{
+  "roomId": 2
+}
+```
+
+### Создать сцену
+```json
+POST /api/scenes
+{
+  "name": "Уйти из дома",
+  "description": "Выключить свет и включить охранные устройства",
+  "actions": [
+    { "deviceId": 1, "targetIsOn": false, "sortOrder": 1 },
+    { "deviceId": 3, "targetIsOn": true, "sortOrder": 2 }
+  ]
+}
+```
+
+### Запустить сцену
+```bash
+curl -X POST http://localhost:5000/api/scenes/1/run
 ```
 
 ---
 
-## 6) MVP-цель (минимум, который должен заработать)
+## Поведение ошибок
 
-Считай, что MVP готов, когда ты можешь:
+Backend возвращает ошибки в формате:
 
-- Создать комнату
-- Добавить устройство в комнату
-- Нажать Toggle (устройство меняет `power`)
-- Увидеть запись в логах о действии
+```json
+{
+  "error": "Текст ошибки",
+  "code": "ERROR_CODE",
+  "message": "Текст ошибки"
+}
+```
 
+Примеры:
+- `ROOM_NOT_EMPTY`
+- `ROOM_NOT_FOUND`
+- `DEVICE_NOT_FOUND`
+- `SCENE_NOT_FOUND`
+- `SCENE_ACTIONS_REQUIRED`
+- `SCENE_NAME_EXISTS`
+
+---
+
+## Что важно для отчёта / демонстрации
+
+1. Комнаты теперь создаются и редактируются отдельно.
+2. Устройства можно перепривязывать между комнатами.
+3. Сцены сохраняются в БД и запускаются вручную.
+4. Выполнение сцен логируется.
+5. История доступна через `GET /api/logs` и показывается в Flet UI.

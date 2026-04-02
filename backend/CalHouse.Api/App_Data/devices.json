@@ -1,20 +1,38 @@
 [
   {
-    "id": 1,
-    "name": "Термостат",
-    "room": "Гостиная",
-    "isOn": false
+    "id": 3,
+    "name": "\u041A\u0430\u043C\u0435\u0440\u0430",
+    "room": "\u041A\u0443\u0445\u043D\u044F",
+    "isOn": true,
+    "type": "\u0414\u0440\u0443\u0433\u043E\u0435",
+    "provider": "mock",
+    "connection": {}
   },
   {
     "id": 2,
-    "name": "Освещение",
-    "room": "Кухня",
-    "isOn": true
+    "name": "\u041E\u0441\u0432\u0435\u0449\u0435\u043D\u0438\u0435",
+    "room": "\u041A\u0443\u0445\u043D\u044F",
+    "isOn": true,
+    "type": "\u0414\u0440\u0443\u0433\u043E\u0435",
+    "provider": "mock",
+    "connection": {}
   },
   {
-    "id": 3,
-    "name": "Камера",
-    "room": "Вход",
-    "isOn": true
+    "id": 1,
+    "name": "\u0422\u0435\u0440\u043C\u043E\u0441\u0442\u0430\u0442",
+    "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
+    "isOn": false,
+    "type": "\u0414\u0440\u0443\u0433\u043E\u0435",
+    "provider": "mock",
+    "connection": {}
+  },
+  {
+    "id": 4,
+    "name": "\u0444\u044B\u0432",
+    "room": "\u0444\u044B\u0432",
+    "isOn": false,
+    "type": "\u0414\u0430\u0442\u0447\u0438\u043A",
+    "provider": "mock",
+    "connection": {}
   }
 ]
