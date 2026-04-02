@@ -1,11 +1,9 @@
-using CalHouse.Api.Models;
+using CalHouse.Api.Infrastructure;
 using CalHouse.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<DeviceStore>();
-builder.Services.AddSingleton<RoomStore>();
-builder.Services.AddSingleton<SceneStore>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 builder.Services.AddCors(options =>
@@ -30,225 +28,146 @@ app.UseCors("DevCors");
 
 app.MapGet("/", () => Results.Text("CalHouse API is running"));
 
-app.MapGet("/api/devices", (DeviceStore store) => Results.Ok(store.GetAllDevices()));
+var api = app.MapGroup("/api");
 
-app.MapGet("/api/devices/{id:int}", (int id, DeviceStore store) =>
-{
-    var device = store.GetDevice(id);
-    return device is null ? Results.NotFound(new { message = "Device not found" }) : Results.Ok(device);
-});
+api.MapGet("/devices", (int? roomId, DeviceStore store) => Results.Ok(store.GetAllDevices(roomId)));
 
-app.MapPost("/api/devices", (CreateDeviceRequest request, DeviceStore deviceStore, RoomStore roomStore) =>
-{
-    var name = (request.Name ?? string.Empty).Trim();
-    var room = (request.Room ?? string.Empty).Trim();
+api.MapGet("/devices/{id:int}", (int id, DeviceStore store) =>
+    Handle(() => Results.Ok(store.GetDevice(id))));
 
-    if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(room))
+api.MapPost("/devices", (CreateDeviceRequest request, DeviceStore store) =>
+    Handle(() =>
     {
-        return Results.BadRequest(new { message = "Name and room are required" });
+        var created = store.AddDevice(
+            request.Name,
+            request.Room,
+            request.RoomId,
+            request.IsOn,
+            request.Type,
+            request.Provider,
+            request.Connection);
+        return Results.Created($"/api/devices/{created.Id}", created);
+    }));
+
+api.MapPut("/devices/{id:int}", (int id, UpdateDeviceRequest request, DeviceStore store) =>
+    Handle(() => Results.Ok(store.UpdateDevice(id, request.Name, request.Room, request.RoomId, request.IsOn, request.Type, request.Provider, request.Connection))));
+
+api.MapPut("/devices/{id:int}/toggle", (int id, DeviceStore store) =>
+    Handle(() => Results.Ok(store.ToggleDevice(id))));
+
+api.MapPut("/devices/{id:int}/room", (int id, AssignDeviceRoomRequest request, DeviceStore store) =>
+    Handle(() => Results.Ok(store.AssignDeviceToRoom(id, request.RoomId))));
+
+api.MapDelete("/devices/{id:int}", (int id, DeviceStore store) =>
+    Handle(() => Results.Ok(store.DeleteDevice(id))));
+
+api.MapPost("/devices/validate-connection", (ValidateConnectionRequest request) =>
+{
+    var provider = (request.Provider ?? string.Empty).Trim().ToLowerInvariant();
+    var connection = request.Connection ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+    if (provider == "mock" || string.IsNullOrWhiteSpace(provider))
+    {
+        return Results.Ok(new { ok = true, message = "Локальное устройство не требует проверки" });
     }
 
-    if (!roomStore.NameExists(room))
+    var hasAnyValue = connection.Values.Any(value => !string.IsNullOrWhiteSpace(value));
+    return Results.Ok(new
     {
-        roomStore.Add(room);
-    }
-
-    var created = deviceStore.AddDevice(name, room, request.IsOn);
-    return Results.Created($"/api/devices/{created.Id}", created);
+        ok = hasAnyValue,
+        message = hasAnyValue ? "Параметры подключения приняты" : "Заполните хотя бы одно поле подключения"
+    });
 });
 
-app.MapPut("/api/devices/{id:int}/toggle", (int id, DeviceStore store) =>
+api.MapGet("/rooms", (DeviceStore store) => Results.Ok(store.GetAllRooms()));
+api.MapGet("/rooms/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.GetRoom(id))));
+api.MapGet("/rooms/{id:int}/devices", (int id, DeviceStore store) => Handle(() =>
 {
-    var updated = store.ToggleDevice(id);
-    return updated is null ? Results.NotFound(new { message = "Device not found" }) : Results.Ok(updated);
-});
-
-app.MapPut("/api/devices/{id:int}/room", (int id, ReassignDeviceRoomRequest request, DeviceStore deviceStore, RoomStore roomStore) =>
+    _ = store.GetRoom(id);
+    return Results.Ok(store.GetAllDevices(id));
+}));
+api.MapPost("/rooms", (CreateRoomRequest request, DeviceStore store) => Handle(() =>
 {
-    var room = roomStore.GetById(request.RoomId);
-    if (room is null)
-    {
-        return Results.NotFound(new { message = "Room not found" });
-    }
-
-    var updated = deviceStore.ReassignDeviceRoom(id, room.Name);
-    return updated is null ? Results.NotFound(new { message = "Device not found" }) : Results.Ok(updated);
-});
-
-app.MapDelete("/api/devices/{id:int}", (int id, DeviceStore store) =>
-{
-    var removed = store.DeleteDevice(id);
-    return removed is null ? Results.NotFound(new { message = "Device not found" }) : Results.Ok(removed);
-});
-
-app.MapGet("/api/rooms", (RoomStore roomStore) => Results.Ok(roomStore.GetAll()));
-
-app.MapGet("/api/rooms/{id:int}", (int id, RoomStore roomStore) =>
-{
-    var room = roomStore.GetById(id);
-    return room is null ? Results.NotFound(new { message = "Room not found" }) : Results.Ok(room);
-});
-
-app.MapGet("/api/rooms/{id:int}/devices", (int id, RoomStore roomStore, DeviceStore deviceStore) =>
-{
-    var room = roomStore.GetById(id);
-    if (room is null)
-    {
-        return Results.NotFound(new { message = "Room not found" });
-    }
-
-    return Results.Ok(deviceStore.GetDevicesByRoom(room.Name));
-});
-
-app.MapPost("/api/rooms", (RoomWriteRequest request, RoomStore roomStore) =>
-{
-    var name = (request.Name ?? string.Empty).Trim();
-    if (string.IsNullOrWhiteSpace(name))
-    {
-        return Results.BadRequest(new { message = "Room name is required" });
-    }
-
-    if (roomStore.NameExists(name))
-    {
-        return Results.Conflict(new { message = "Room name already exists", code = "ROOM_ALREADY_EXISTS" });
-    }
-
-    var created = roomStore.Add(name);
+    var created = store.CreateRoom(request.Name, request.Zone);
     return Results.Created($"/api/rooms/{created.Id}", created);
-});
+}));
+api.MapPut("/rooms/{id:int}", (int id, UpdateRoomRequest request, DeviceStore store) =>
+    Handle(() => Results.Ok(store.UpdateRoom(id, request.Name, request.Zone))));
+api.MapDelete("/rooms/{id:int}", (int id, DeviceStore store) =>
+    Handle(() =>
+    {
+        store.DeleteRoom(id);
+        return Results.NoContent();
+    }));
 
-app.MapPut("/api/rooms/{id:int}", (int id, RoomWriteRequest request, RoomStore roomStore, DeviceStore deviceStore) =>
+api.MapGet("/scenes", (DeviceStore store) => Results.Ok(store.GetAllScenes()));
+api.MapGet("/scenes/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.GetScene(id))));
+api.MapGet("/scenes/{id:int}/runs", (int id, int? limit, DeviceStore store) =>
+    Handle(() => Results.Ok(store.GetSceneRuns(id, limit ?? 20))));
+api.MapPost("/scenes", (CreateSceneRequest request, DeviceStore store) => Handle(() =>
 {
-    var name = (request.Name ?? string.Empty).Trim();
-    if (string.IsNullOrWhiteSpace(name))
-    {
-        return Results.BadRequest(new { message = "Room name is required" });
-    }
-
-    var existing = roomStore.GetById(id);
-    if (existing is null)
-    {
-        return Results.NotFound(new { message = "Room not found" });
-    }
-
-    if (roomStore.NameExists(name, id))
-    {
-        return Results.Conflict(new { message = "Room name already exists", code = "ROOM_ALREADY_EXISTS" });
-    }
-
-    var oldName = existing.Name;
-    var updated = roomStore.Rename(id, name)!;
-    deviceStore.RenameRoomForDevices(oldName, updated.Name);
-    return Results.Ok(updated);
-});
-
-app.MapDelete("/api/rooms/{id:int}", (int id, RoomStore roomStore, DeviceStore deviceStore) =>
-{
-    var room = roomStore.GetById(id);
-    if (room is null)
-    {
-        return Results.NotFound(new { message = "Room not found" });
-    }
-
-    if (deviceStore.CountDevicesInRoom(room.Name) > 0)
-    {
-        return Results.Conflict(new { message = "Room has devices", code = "ROOM_NOT_EMPTY" });
-    }
-
-    roomStore.Delete(id);
-    return Results.NoContent();
-});
-
-app.MapGet("/api/scenes", (SceneStore store) => Results.Ok(store.GetAllScenes()));
-
-app.MapGet("/api/scenes/{id:int}", (int id, SceneStore store) =>
-{
-    var scene = store.GetScene(id);
-    return scene is null ? Results.NotFound(new { message = "Scene not found" }) : Results.Ok(scene);
-});
-
-app.MapPost("/api/scenes", (SceneWriteRequest request, SceneStore sceneStore, DeviceStore deviceStore) =>
-{
-    var validationError = ValidateSceneRequest(request, deviceStore);
-    if (validationError is not null)
-    {
-        return validationError;
-    }
-
-    var created = sceneStore.AddScene(request.Name!.Trim(), request.Description, request.Actions!);
+    var actions = (request.Actions ?? new List<SceneActionRequest>())
+        .Select((action, index) => new SceneActionInput(action.DeviceId, action.TargetIsOn, action.SortOrder ?? index + 1))
+        .ToList();
+    var created = store.CreateScene(request.Name, request.Description, actions);
     return Results.Created($"/api/scenes/{created.Id}", created);
-});
-
-app.MapPut("/api/scenes/{id:int}", (int id, SceneWriteRequest request, SceneStore sceneStore, DeviceStore deviceStore) =>
+}));
+api.MapPut("/scenes/{id:int}", (int id, UpdateSceneRequest request, DeviceStore store) => Handle(() =>
 {
-    var validationError = ValidateSceneRequest(request, deviceStore);
-    if (validationError is not null)
-    {
-        return validationError;
-    }
-
-    var updated = sceneStore.UpdateScene(id, request.Name!.Trim(), request.Description, request.Actions!);
-    return updated is null ? Results.NotFound(new { message = "Scene not found" }) : Results.Ok(updated);
-});
-
-app.MapDelete("/api/scenes/{id:int}", (int id, SceneStore sceneStore) =>
+    var actions = (request.Actions ?? new List<SceneActionRequest>())
+        .Select((action, index) => new SceneActionInput(action.DeviceId, action.TargetIsOn, action.SortOrder ?? index + 1))
+        .ToList();
+    return Results.Ok(store.UpdateScene(id, request.Name, request.Description, actions));
+}));
+api.MapDelete("/scenes/{id:int}", (int id, DeviceStore store) => Handle(() =>
 {
-    var deleted = sceneStore.DeleteScene(id);
-    return deleted is null ? Results.NotFound(new { message = "Scene not found" }) : Results.NoContent();
-});
+    store.DeleteScene(id);
+    return Results.NoContent();
+}));
+api.MapPost("/scenes/{id:int}/run", (int id, DeviceStore store) =>
+    Handle(() => Results.Ok(store.RunScene(id))));
 
-app.MapPost("/api/scenes/{id:int}/run", (int id, SceneStore sceneStore, DeviceStore deviceStore) =>
-{
-    var scene = sceneStore.GetScene(id);
-    if (scene is null)
-    {
-        return Results.NotFound(new { message = "Scene not found" });
-    }
-
-    var executionItems = new List<SceneExecutionItem>();
-
-    foreach (var action in scene.Actions)
-    {
-        var device = deviceStore.SetDeviceState(action.DeviceId, action.IsOn);
-        executionItems.Add(new SceneExecutionItem
-        {
-            DeviceId = action.DeviceId,
-            RequestedState = action.IsOn,
-            Status = device is null ? "device_not_found" : "applied"
-        });
-    }
-
-    var log = sceneStore.AddExecutionLog(scene.Id, scene.Name, executionItems);
-    return Results.Ok(log);
-});
-
-app.MapGet("/api/scenes/executions", (int? sceneId, SceneStore sceneStore) => Results.Ok(sceneStore.GetExecutionLogs(sceneId)));
+api.MapGet("/logs", (int? limit, DeviceStore store) => Results.Ok(store.GetLogs(limit ?? 50)));
 
 app.Run();
 
-static IResult? ValidateSceneRequest(SceneWriteRequest request, DeviceStore deviceStore)
+static IResult Handle(Func<IResult> action)
 {
-    if (string.IsNullOrWhiteSpace(request.Name))
+    try
     {
-        return Results.BadRequest(new { message = "Scene name is required" });
+        return action();
     }
-
-    if (request.Actions is null || request.Actions.Count == 0)
+    catch (ApiProblemException problem)
     {
-        return Results.BadRequest(new { message = "Scene should contain at least one action" });
+        return Results.Json(new { error = problem.Message, code = problem.Code, message = problem.Message }, statusCode: problem.StatusCode);
     }
-
-    var allDevices = deviceStore.GetAllDevices();
-    var missingDeviceId = request.Actions.Select(a => a.DeviceId).FirstOrDefault(id => allDevices.All(d => d.Id != id));
-    if (missingDeviceId != 0)
+    catch (Exception ex)
     {
-        return Results.BadRequest(new { message = $"Device with id {missingDeviceId} not found" });
+        return Results.Json(new { error = ex.Message, code = "INTERNAL_ERROR", message = ex.Message }, statusCode: StatusCodes.Status500InternalServerError);
     }
-
-    return null;
 }
 
-internal sealed record CreateDeviceRequest(string? Name, string? Room, bool IsOn = false);
-internal sealed record ReassignDeviceRoomRequest(int RoomId);
-internal sealed record RoomWriteRequest(string? Name);
-internal sealed record SceneWriteRequest(string? Name, string? Description, List<SceneAction>? Actions);
+internal sealed record CreateDeviceRequest(
+    string Name,
+    string? Room,
+    int? RoomId,
+    bool IsOn = false,
+    string? Type = "Другое",
+    string? Provider = "mock",
+    Dictionary<string, string>? Connection = null);
+
+internal sealed record UpdateDeviceRequest(
+    string? Name,
+    string? Room,
+    int? RoomId,
+    bool? IsOn,
+    string? Type,
+    string? Provider,
+    Dictionary<string, string>? Connection);
+
+internal sealed record AssignDeviceRoomRequest(int RoomId);
+internal sealed record ValidateConnectionRequest(string? Provider, Dictionary<string, string>? Connection);
+internal sealed record CreateRoomRequest(string Name, string? Zone);
+internal sealed record UpdateRoomRequest(string Name, string? Zone);
+internal sealed record SceneActionRequest(int DeviceId, bool TargetIsOn, int? SortOrder);
+internal sealed record CreateSceneRequest(string Name, string? Description, List<SceneActionRequest>? Actions);
+internal sealed record UpdateSceneRequest(string Name, string? Description, List<SceneActionRequest>? Actions);

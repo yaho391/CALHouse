@@ -1,2044 +1,851 @@
 import flet as ft
 import requests
-from datetime import datetime, timedelta
-import traceback
+from datetime import datetime
+from typing import Any
 
-# пока что надо
-import warnings
-warnings.filterwarnings("ignore", category=DeprecationWarning)
-
-USER_EMAIL = "user@smarthome.mtp"
-USER_ROLE = "Пользователь"
 API_BASE = "http://localhost:5000"
-
-INVALID_DEVICE_NAMES = {"on", "off", "вкл", "выкл"}
 DEVICE_TYPES = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Другое"]
-PROVIDER_LABELS = {
-    "mock": "Mock / Локальное (текущее API)",
-    "home_assistant": "Home Assistant",
-    "tuya": "Tuya",
-    "philips_hue": "Philips Hue",
-    "shelly": "Shelly",
-    "mqtt": "MQTT",
-}
-PROVIDER_FIELDS = {
-    "home_assistant": ["base_url", "long_lived_token", "entity_id"],
-    "tuya": ["access_id", "access_key", "device_id", "region"],
-    "philips_hue": ["bridge_ip", "username", "light_id"],
-    "shelly": ["device_ip", "cloud_token", "device_id"],
-    "mqtt": ["broker_url", "port", "username", "password", "topic"],
-}
-CONNECTION_FIELD_LABELS = {
-    "base_url": "Base URL",
-    "long_lived_token": "Long-lived token",
-    "entity_id": "Entity ID",
-    "access_id": "Access ID",
-    "access_key": "Access Key",
-    "device_id": "Device ID",
-    "region": "Region",
-    "bridge_ip": "Bridge IP",
-    "username": "Username / Token",
-    "light_id": "Light ID",
-    "device_ip": "Device IP",
-    "cloud_token": "Cloud token",
-    "broker_url": "Broker URL",
-    "port": "Port",
-    "password": "Password",
-    "topic": "Topic",
-}
-
-devices = [
-    {
-        "id": 1,
-        "name": "Термостат",
-        "room": "Гостиная",
-        "value": "22°C",
-        "status": "online",
-        "badge": None,
-        "icon": "thermostat",
-        "trend": "up",
-    },
-    {
-        "id": 2,
-        "name": "Освещение",
-        "room": "Спальня",
-        "value": "75%",
-        "status": "online",
-        "badge": None,
-        "icon": "light",
-        "trend": "flat",
-    },
-    {
-        "id": 3,
-        "name": "Камера",
-        "room": "Входная дверь",
-        "value": "100%",
-        "status": "online",
-        "badge": None,
-        "icon": "camera",
-        "trend": "flat",
-    },
-    {
-        "id": 4,
-        "name": "Энергопотребление",
-        "room": "Весь дом",
-        "value": "2.4 кВт",
-        "status": "warning",
-        "badge": "Предупреждение",
-        "icon": "energy",
-        "trend": "down",
-    },
-]
-
-history_list = [
-    {
-        "ts": datetime.now() - timedelta(minutes=7),
-        "user": "admin@smarthome.mtp",
-        "action": "Изменение",
-        "device": "Термостат гостиная",
-        "details": "Температура изменена с 20°C на 22°C",
-        "tag_color": "blue",
-    },
-    {
-        "ts": datetime.now() - timedelta(minutes=9),
-        "user": USER_EMAIL,
-        "action": "Включение",
-        "device": "Освещение кухня",
-        "details": "Яркость установлена на 100%",
-        "tag_color": "green",
-    },
-    {
-        "ts": datetime.now() - timedelta(minutes=14),
-        "user": "admin@smarthome.mtp",
-        "action": "Создание",
-        "device": 'Сценарий "Вечер"',
-        "details": "Создан новый автоматический сценарий",
-        "tag_color": "purple",
-    },
-    {
-        "ts": datetime.now() - timedelta(minutes=18),
-        "user": USER_EMAIL,
-        "action": "Выключение",
-        "device": "Кондиционер спальня",
-        "details": "Устройство выключено пользователем",
-        "tag_color": "gray",
-    },
-    {
-        "ts": datetime.now() - timedelta(hours=2),
-        "user": "Система",
-        "action": "Автоматическое",
-        "device": "Камера входная",
-        "details": "Обнаружено движение, началась запись",
-        "tag_color": "orange",
-    },
-]
 
 
-def _c(hex_color: str):
-    return hex_color
-
-
-def badge(text: str, color: str):
-    return ft.Container(
-        padding=ft.padding.symmetric(horizontal=10, vertical=6),
-        border_radius=999,
-        bgcolor=color,
-        content=ft.Text(text, size=12, color=_c("#111111")),
-    )
-
-
-def chip(text: str):
-    return ft.Container(
-        padding=ft.padding.symmetric(horizontal=10, vertical=6),
-        border_radius=999,
-        bgcolor=_c("#ffffff"),
-        content=ft.Row(
-            tight=True,
-            spacing=6,
-            controls=[
-                ft.Icon(ft.Icons.PERSON, size=16, color=_c("#0f172a")),
-                ft.Text(text, size=12, color=_c("#0f172a"), weight=ft.FontWeight.W_600),
-            ],
-        ),
-    )
-
-
-def card_container(content: ft.Control, padding=16):
-    return ft.Container(
-        padding=padding,
-        border_radius=16,
-        bgcolor=_c("#ffffff"),
-        border=ft.border.all(1, _c("#e5e7eb")),
-        content=content,
-    )
-
-
-def small_stat(title: str, value: str, icon: str):
-    icon_map = {
-        "devices": ft.Icons.DEVICES_OTHER,
-        "energy": ft.Icons.BOLT,
-    }
-    return ft.Container(
-        expand=True,
-        padding=16,
-        border_radius=16,
-        bgcolor=_c("#ffffff"),
-        border=ft.border.all(1, _c("#e5e7eb")),
-        content=ft.Row(
-            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-            controls=[
-                ft.Column(
-                    spacing=6,
-                    controls=[
-                        ft.Row(
-                            spacing=8,
-                            controls=[
-                                ft.Icon(icon_map.get(icon, ft.Icons.INFO), size=18, color=_c("#0f172a")),
-                                ft.Text(title, size=12, color=_c("#64748b")),
-                            ],
-                        ),
-                        ft.Text(value, size=22, weight=ft.FontWeight.BOLD, color=_c("#0f172a")),
-                    ],
-                )
-            ],
-        ),
-    )
-
-
-def device_icon(kind: str):
-    m = {
-        "thermostat": ft.Icons.THERMOSTAT,
-        "light": ft.Icons.LIGHTBULB_OUTLINE,
-        "camera": ft.Icons.VIDEOCAM_OUTLINED,
-        "energy": ft.Icons.BOLT,
-    }
-    return m.get(kind, ft.Icons.DEVICES_OTHER)
-
-
-def status_dot(status: str):
-    color = _c("#22c55e") if status == "online" else (_c("#f59e0b") if status == "warning" else _c("#94a3b8"))
-    return ft.Container(width=8, height=8, border_radius=999, bgcolor=color)
-
-
-def trend_icon(trend: str):
-    if trend == "up":
-        return ft.Icon(ft.Icons.TRENDING_UP, size=16, color=_c("#22c55e"))
-    if trend == "down":
-        return ft.Icon(ft.Icons.TRENDING_DOWN, size=16, color=_c("#ef4444"))
-    return ft.Icon(ft.Icons.TRENDING_FLAT, size=16, color=_c("#94a3b8"))
-
-
-def toast(page: ft.Page, text: str):
-    page.snack_bar = ft.SnackBar(ft.Text(text))
-    page.snack_bar.open = True
-    page.update()
-
-
-def debug_log(message: str):
-    print(f"[CALHouse UI] {message}")
+def fmt_dt(value: str | None) -> str:
+    if not value:
+        return "—"
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return value
 
 
 def main(page: ft.Page):
-    page.title = "SmartHome UI"
-    page.window_width = 1200
-    page.window_height = 800
-    page.window_resizable = True
-
-    flet_version = getattr(ft, "__version__", "unknown")
-    debug_log(f"Flet version: {flet_version}")
-    if flet_version != "0.80.5":
-        debug_log("WARNING: This project is tested for Flet 0.80.5")
+    page.title = "CALHouse / Smart Home"
+    page.window_width = 1280
+    page.window_height = 860
+    page.window_min_width = 1080
+    page.window_min_height = 720
+    page.padding = 0
+    page.spacing = 0
+    page.theme_mode = ft.ThemeMode.LIGHT
 
     state = {
-        "logged_in": False,
         "tab": 0,
-        "history_mode": "list",  # list/table
-        "show_add_form": False,
         "dark": False,
-        "notif_push": True,
-        "notif_email": True,
-        "notif_sound": True,
-        "notif_security": True,
-        "energy_reports": False,
     }
-
-    device_items = [d.copy() for d in devices]
-    rooms_items: list[dict] = []
-    scenes_items: list[dict] = []
-    scene_logs_items: list[dict] = []
-
-    def map_api_device(device: dict):
-        raw_id = int(device.get("id", 0))
-        name = str(device.get("name", "")).strip()
-        device_type = str(device.get("type", "")).strip()
-
-        if not name or name.lower() in INVALID_DEVICE_NAMES:
-            name = f"Устройство #{raw_id if raw_id > 0 else '?'}"
-
-        type_lower = device_type.lower()
-        lname = name.lower()
-        if type_lower == "свет" or "свет" in lname or "ламп" in lname:
-            icon = "light"
-        elif type_lower == "климат" or "термо" in lname or "климат" in lname:
-            icon = "thermostat"
-        elif type_lower == "камера" or "камер" in lname:
-            icon = "camera"
-        else:
-            icon = "energy"
-
-        is_on = bool(device.get("isOn", False))
-        room = str(device.get("room", "")).strip() or "Комната не указана"
-
-        return {
-            "id": raw_id,
-            "name": name,
-            "room": room,
-            "type": device_type or "Другое",
-            "value": "ВКЛ" if is_on else "ВЫКЛ",
-            "status": "online" if is_on else "offline",
-            "badge": None,
-            "icon": icon,
-            "trend": "flat",
-            "status_text": "Включено" if is_on else "Выключено",
-        }
-
-    def load_devices_from_api(show_error: bool = False):
-        nonlocal device_items
-        debug_log(f"GET {API_BASE}/api/devices")
-        try:
-            response = requests.get(f"{API_BASE}/api/devices", timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            debug_log(f"GET /api/devices -> {response.status_code}, items={len(data) if isinstance(data, list) else 'n/a'}")
-            if isinstance(data, list):
-                device_items = [map_api_device(item) for item in data]
-        except requests.RequestException as ex:
-            debug_log(f"GET /api/devices failed: {ex}")
-            if show_error:
-                toast(page, "API недоступен. Проверьте backend на http://localhost:5000")
-
-    def toggle_device_via_api(device_id: int):
-        debug_log(f"Toggle click for device #{device_id}")
-        try:
-            response = requests.put(f"{API_BASE}/api/devices/{device_id}/toggle", timeout=5)
-            response.raise_for_status()
-            debug_log(f"PUT /api/devices/{device_id}/toggle -> {response.status_code}")
-            load_devices_from_api(show_error=True)
-            toast(page, f"Устройство #{device_id} переключено")
-            build_root()
-        except requests.RequestException as ex:
-            debug_log(f"PUT /api/devices/{device_id}/toggle failed: {ex}")
-            toast(page, f"Не удалось переключить устройство #{device_id}")
-
-    def add_device_via_api(
-        name: str,
-        room: str,
-        is_on: bool = False,
-        device_type: str = "Другое",
-        provider: str = "mock",
-        connection: dict | None = None,
-    ):
-        connection = connection or {}
-        payload = {
-            "name": name.strip(),
-            "room": room.strip(),
-            "isOn": is_on,
-            "type": device_type,
-            "provider": provider,
-            "connection": connection,
-        }
-        debug_log(f"Create device payload: {payload}")
-
-        if not payload["name"] or not payload["room"] or not payload["type"]:
-            debug_log("Create device validation failed: empty name/room/type")
-            toast(page, "Введите название, комнату и тип")
-            return False
-
-        required_fields = PROVIDER_FIELDS.get(provider, []) if provider != "mock" else []
-        missing_fields = [key for key in required_fields if not str(connection.get(key, "")).strip()]
-        if missing_fields:
-            debug_log(f"Create device validation failed: missing connection fields {missing_fields}")
-            toast(page, "Заполните обязательные поля подключения")
-            return False
-
-        try:
-            debug_log(f"POST {API_BASE}/api/devices")
-            response = requests.post(f"{API_BASE}/api/devices", json=payload, timeout=5)
-            response.raise_for_status()
-            created = response.json()
-            debug_log(f"POST /api/devices -> {response.status_code}, response={created}")
-            load_devices_from_api(show_error=True)
-            toast(page, f"Устройство добавлено: #{created.get('id', '?')} {created.get('name', '')}")
-            build_root()
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"POST /api/devices failed: {ex}")
-            toast(page, "Не удалось добавить устройство")
-            return False
-
-    def validate_connection_via_api(provider: str, connection: dict):
-        payload = {"provider": provider, "connection": connection}
-        debug_log(f"Validate connection payload: {payload}")
-        try:
-            response = requests.post(f"{API_BASE}/api/devices/validate-connection", json=payload, timeout=5)
-            if response.status_code == 404:
-                debug_log("POST /api/devices/validate-connection -> 404 (endpoint stub)")
-                toast(page, "Проверка подключения пока не реализована на backend")
-                return False
-            response.raise_for_status()
-            data = response.json() if response.text else {}
-            ok = bool(data.get("ok", True))
-            debug_log(f"POST /api/devices/validate-connection -> {response.status_code}, response={data}")
-            toast(page, "Подключение успешно" if ok else f"Ошибка подключения: {data.get('message', 'неизвестно')}")
-            return ok
-        except requests.RequestException as ex:
-            debug_log(f"POST /api/devices/validate-connection failed: {ex}")
-            toast(page, "Не удалось проверить подключение")
-            return False
-
-    def delete_device_via_api(device_id: int):
-        debug_log(f"Delete click for device #{device_id}")
-        try:
-            response = requests.delete(f"{API_BASE}/api/devices/{device_id}", timeout=5)
-            response.raise_for_status()
-            debug_log(f"DELETE /api/devices/{device_id} -> {response.status_code}")
-            load_devices_from_api(show_error=True)
-            toast(page, f"Устройство #{device_id} удалено")
-            build_root()
-        except requests.RequestException as ex:
-            debug_log(f"DELETE /api/devices/{device_id} failed: {ex}")
-            toast(page, f"Не удалось удалить устройство #{device_id}")
-
-    def load_rooms_from_api(show_error: bool = False):
-        nonlocal rooms_items
-        debug_log(f"GET {API_BASE}/api/rooms")
-        try:
-            response = requests.get(f"{API_BASE}/api/rooms", timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            rooms_items = data if isinstance(data, list) else []
-        except requests.RequestException as ex:
-            debug_log(f"GET /api/rooms failed: {ex}")
-            if show_error:
-                toast(page, "Не удалось загрузить комнаты")
-
-    def create_room_via_api(room_name: str):
-        try:
-            response = requests.post(f"{API_BASE}/api/rooms", json={"name": room_name.strip()}, timeout=5)
-            response.raise_for_status()
-            load_rooms_from_api(show_error=True)
-            toast(page, f'Комната "{room_name}" создана')
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"POST /api/rooms failed: {ex}")
-            toast(page, "Не удалось создать комнату")
-            return False
-
-    def rename_room_via_api(room_id: int, room_name: str):
-        try:
-            response = requests.put(f"{API_BASE}/api/rooms/{room_id}", json={"name": room_name.strip()}, timeout=5)
-            response.raise_for_status()
-            load_rooms_from_api(show_error=True)
-            load_devices_from_api(show_error=True)
-            toast(page, "Комната переименована")
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"PUT /api/rooms/{room_id} failed: {ex}")
-            toast(page, "Не удалось переименовать комнату")
-            return False
-
-    def delete_room_via_api(room_id: int):
-        try:
-            response = requests.delete(f"{API_BASE}/api/rooms/{room_id}", timeout=5)
-            response.raise_for_status()
-            load_rooms_from_api(show_error=True)
-            toast(page, "Комната удалена")
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"DELETE /api/rooms/{room_id} failed: {ex}")
-            toast(page, "Не удалось удалить комнату (возможно, в ней есть устройства)")
-            return False
-
-    def reassign_device_room_via_api(device_id: int, room_id: int):
-        try:
-            response = requests.put(
-                f"{API_BASE}/api/devices/{device_id}/room",
-                json={"roomId": room_id},
-                timeout=5,
-            )
-            response.raise_for_status()
-            load_devices_from_api(show_error=True)
-            load_rooms_from_api(show_error=True)
-            toast(page, "Привязка устройства обновлена")
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"PUT /api/devices/{device_id}/room failed: {ex}")
-            toast(page, "Не удалось изменить привязку устройства")
-            return False
-
-    def load_scenes_from_api(show_error: bool = False):
-        nonlocal scenes_items
-        try:
-            response = requests.get(f"{API_BASE}/api/scenes", timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            scenes_items = data if isinstance(data, list) else []
-        except requests.RequestException as ex:
-            debug_log(f"GET /api/scenes failed: {ex}")
-            if show_error:
-                toast(page, "Не удалось загрузить сценарии")
-
-    def load_scene_logs_from_api(show_error: bool = False):
-        nonlocal scene_logs_items
-        try:
-            response = requests.get(f"{API_BASE}/api/scenes/executions", timeout=5)
-            response.raise_for_status()
-            data = response.json()
-            scene_logs_items = data if isinstance(data, list) else []
-        except requests.RequestException as ex:
-            debug_log(f"GET /api/scenes/executions failed: {ex}")
-            if show_error:
-                toast(page, "Не удалось загрузить журнал сценариев")
-
-    def create_scene_via_api(payload: dict):
-        try:
-            response = requests.post(f"{API_BASE}/api/scenes", json=payload, timeout=5)
-            response.raise_for_status()
-            load_scenes_from_api(show_error=True)
-            toast(page, "Сценарий создан")
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"POST /api/scenes failed: {ex}")
-            toast(page, "Не удалось создать сценарий")
-            return False
-
-    def update_scene_via_api(scene_id: int, payload: dict):
-        try:
-            response = requests.put(f"{API_BASE}/api/scenes/{scene_id}", json=payload, timeout=5)
-            response.raise_for_status()
-            load_scenes_from_api(show_error=True)
-            toast(page, "Сценарий обновлен")
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"PUT /api/scenes/{scene_id} failed: {ex}")
-            toast(page, "Не удалось обновить сценарий")
-            return False
-
-    def delete_scene_via_api(scene_id: int):
-        try:
-            response = requests.delete(f"{API_BASE}/api/scenes/{scene_id}", timeout=5)
-            response.raise_for_status()
-            load_scenes_from_api(show_error=True)
-            toast(page, "Сценарий удален")
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"DELETE /api/scenes/{scene_id} failed: {ex}")
-            toast(page, "Не удалось удалить сценарий")
-            return False
-
-    def run_scene_via_api(scene_id: int):
-        try:
-            response = requests.post(f"{API_BASE}/api/scenes/{scene_id}/run", timeout=5)
-            response.raise_for_status()
-            load_scene_logs_from_api(show_error=True)
-            load_devices_from_api(show_error=True)
-            toast(page, "Сценарий выполнен")
-            return True
-        except requests.RequestException as ex:
-            debug_log(f"POST /api/scenes/{scene_id}/run failed: {ex}")
-            toast(page, "Не удалось запустить сценарий")
-            return False
-
-    # темная тема (единая палитра)
-    def palette():
-        if state.get("dark", False):
-            return {
-                "BG": "#0b1020",
-                "SURFACE": "#0f172a",
-                "CARD": "#111827",
-                "CARD2": "#0b1226",
-                "BORDER": "#1f2a44",
-                "TEXT": "#f8fafc",
-                "MUTED": "#94a3b8",
-                "FIELD": "#0b1226",
-                "FIELD_TEXT": "#f8fafc",
-                "FIELD_HINT": "#94a3b8",
-                "TOPBAR": "#0b1020",
-                "NAV": "#111827",
-            }
-        else:
-            return {
-                "BG": "#f3f4f6",
-                "SURFACE": "#ffffff",
-                "CARD": "#ffffff",
-                "CARD2": "#ffffff",
-                "BORDER": "#e5e7eb",
-                "TEXT": "#0f172a",
-                "MUTED": "#64748b",
-                "FIELD": "#eef2f7",
-                "FIELD_TEXT": "#0f172a",
-                "FIELD_HINT": "#64748b",
-                "TOPBAR": "#ffffff",
-                "NAV": "#ffffff",
-            }
-
-    def C(key: str):
-        return _c(palette()[key])
-
-    def T(text, **kwargs):
-        return ft.Text(text, color=kwargs.pop("color", C("TEXT")), **kwargs)
-
-    def TM(text, **kwargs):
-        return ft.Text(text, color=kwargs.pop("color", C("MUTED")), **kwargs)
-
-    # хелперы (тематические)
-    def badge2(text: str):
-        return ft.Container(
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-            border_radius=999,
-            bgcolor=C("FIELD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=ft.Text(text, size=12, color=C("TEXT"), weight=ft.FontWeight.W_600),
-        )
-
-    def chip2(text: str):
-        # чип на градиенте оставляем светлым (как было), чтоб читалось
-        return ft.Container(
-            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-            border_radius=999,
-            bgcolor=_c("#ffffff"),
-            content=ft.Row(
-                tight=True,
-                spacing=6,
-                controls=[
-                    ft.Icon(ft.Icons.PERSON, size=16, color=_c("#0f172a")),
-                    ft.Text(text, size=12, color=_c("#0f172a"), weight=ft.FontWeight.W_600),
-                ],
-            ),
-        )
-
-    def card2(content: ft.Control, padding=16):
-        return ft.Container(
-            padding=padding,
-            border_radius=16,
-            bgcolor=C("CARD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=content,
-        )
-
-    def small_stat2(title: str, value: str, icon: str):
-        icon_map = {"devices": ft.Icons.DEVICES_OTHER, "energy": ft.Icons.BOLT}
-        return ft.Container(
-            expand=True,
-            padding=16,
-            border_radius=16,
-            bgcolor=C("CARD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=ft.Row(
-                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                controls=[
-                    ft.Column(
-                        spacing=6,
-                        controls=[
-                            ft.Row(
-                                spacing=8,
-                                controls=[
-                                    ft.Icon(icon_map.get(icon, ft.Icons.INFO), size=18, color=C("TEXT")),
-                                    TM(title, size=12),
-                                ],
-                            ),
-                            T(value, size=22, weight=ft.FontWeight.BOLD),
-                        ],
-                    )
-                ],
-            ),
-        )
-
-    def themed_field(**kwargs):
-        return ft.TextField(
-            bgcolor=C("FIELD"),
-            color=C("FIELD_TEXT"),
-            border_color=C("BORDER"),
-            hint_style=ft.TextStyle(color=C("FIELD_HINT")),
-            label_style=ft.TextStyle(color=C("MUTED")),
-            
-            **kwargs
-        )
-
-    def themed_dropdown(**kwargs):
-        return ft.Dropdown(
-            bgcolor=C("FIELD"),
-            border_color=C("BORDER"),
-            **kwargs
-        )
-
-    # login fields (оставил визуал как было, но текст читаемый)
-    email_tf = ft.TextField(
-        label="Email",
-        hint_text="your@email.com",
-        prefix_icon=ft.Icons.MAIL_OUTLINE,
-        width=420,
-        bgcolor=_c("#f3f4f6"),
-        border_color=_c("#e5e7eb"),
-        color=_c("#0f172a"),
-    )
-    pass_tf = ft.TextField(
-        label="Пароль",
-        password=True,
-        can_reveal_password=True,
-        prefix_icon=ft.Icons.LOCK_OUTLINE,
-        width=420,
-        bgcolor=_c("#f3f4f6"),
-        border_color=_c("#e5e7eb"),
-        color=_c("#0f172a"),
-    )
-
-    demo_box = ft.Container(
-        width=420,
-        padding=12,
-        border_radius=12,
-        bgcolor=_c("#eff6ff"),
-        content=ft.Column(
-            spacing=6,
-            controls=[
-                ft.Text("Демо аккаунты:", weight=ft.FontWeight.BOLD, color=_c("#1d4ed8")),
-                ft.Text("👤  user@smarthome.mtp / user123", color=_c("#413e87")),
-                ft.Text("🧑‍💼  admin@smarthome.mtp / admin123", color=_c("#413e87")),
-            ],
-        ),
-    )
-
-    def on_login(_):
-        state["logged_in"] = True
-        load_devices_from_api(show_error=True)
-        load_rooms_from_api(show_error=True)
-        load_scenes_from_api(show_error=True)
-        load_scene_logs_from_api(show_error=True)
-        build_root()
-
-    login_view = ft.Container(
-        expand=True,
-        bgcolor=_c("#eaf1ff"),
-        alignment=ft.Alignment(0, 0),
-        content=ft.Column(
-            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-            alignment=ft.MainAxisAlignment.CENTER,
-            spacing=18,
-            controls=[
-                ft.Container(
-                    width=52,
-                    height=52,
-                    border_radius=14,
-                    bgcolor=_c("#2563eb"),
-                    alignment=ft.Alignment(0, 0),
-                    content=ft.Icon(ft.Icons.HOME, color=_c("#ffffff")),
-                ),
-                ft.Text("SmartHome", size=30, weight=ft.FontWeight.BOLD, color=_c("#0f172a")),
-                ft.Text("Управление умным домом", color=_c("#475569")),
-                card_container(
-                    ft.Column(
-                        spacing=12,
-                        controls=[
-                            ft.Text("Вход в систему", size=16, weight=ft.FontWeight.BOLD, color=_c("#0f172a")),
-                            ft.Text("Введите свои учетные данные для доступа", color=_c("#64748b")),
-                            email_tf,
-                            pass_tf,
-                            demo_box,
-                            ft.ElevatedButton(
-                                "Войти",
-                                width=420,
-                                height=44,
-                                bgcolor=_c("#0b1020"),
-                                color=_c("#ffffff"),
-                                on_click=on_login,
-                            ),
-                            ft.Row(
-                                alignment=ft.MainAxisAlignment.CENTER,
-                                controls=[
-                                    ft.Text("Нет аккаунта? ", color=_c("#64748b")),
-                                    ft.TextButton("Зарегистрироваться", on_click=lambda e: toast(page, "Пока макет")),
-                                ],
-                            ),
-                        ],
-                    ),
-                    padding=18,
-                ),
-            ],
-        ),
-    )
+    data: dict[str, list[dict[str, Any]]] = {
+        "devices": [],
+        "rooms": [],
+        "scenes": [],
+        "logs": [],
+    }
 
     content = ft.Container(expand=True, padding=20)
 
-    def set_appbar_home():
-        page.appbar = ft.AppBar(
-            bgcolor=C("TOPBAR"),
-            elevation=0,
-            title=ft.Text("", color=C("TEXT")),
-            actions=[
-                ft.IconButton(
-                    ft.Icons.NOTIFICATIONS_OUTLINED,
-                    icon_color=C("MUTED"),
-                    on_click=lambda e: toast(page, "Уведомления (макет)"),
-                )
-            ],
-        )
+    def palette() -> dict[str, str]:
+        if state["dark"]:
+            return {
+                "bg": "#0b1020",
+                "card": "#111827",
+                "border": "#1f2a44",
+                "text": "#f8fafc",
+                "muted": "#94a3b8",
+                "field": "#0f172a",
+                "nav": "#111827",
+                "accent": "#2563eb",
+                "danger": "#dc2626",
+                "success": "#16a34a",
+            }
+        return {
+            "bg": "#f3f4f6",
+            "card": "#ffffff",
+            "border": "#e5e7eb",
+            "text": "#0f172a",
+            "muted": "#64748b",
+            "field": "#eef2f7",
+            "nav": "#ffffff",
+            "accent": "#2563eb",
+            "danger": "#dc2626",
+            "success": "#16a34a",
+        }
 
+    def c(name: str) -> str:
+        return palette()[name]
 
+    def T(text: str, **kwargs):
+        return ft.Text(text, color=kwargs.pop("color", c("text")), **kwargs)
 
-    def header_gradient_block():
-        grad = ft.LinearGradient(
-            begin=ft.Alignment(0, 0),
-            end=ft.Alignment(1, 0),
-            colors=[_c("#2563eb"), _c("#9333ea")],
-        )
+    def TM(text: str, **kwargs):
+        return ft.Text(text, color=kwargs.pop("color", c("muted")), **kwargs)
+
+    def card(*controls: ft.Control, padding: int = 16, expand: bool = False):
         return ft.Container(
-            padding=18,
-            border_radius=18,
-            gradient=grad,
-            content=ft.Column(
-                spacing=12,
-                controls=[
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        vertical_alignment=ft.CrossAxisAlignment.START,
-                        controls=[
-                            ft.Column(
-                                spacing=6,
-                                controls=[
-                                    ft.Text("Добро пожаловать!", size=26, weight=ft.FontWeight.BOLD, color=_c("#ffffff")),
-                                    ft.Text("user", color=_c("#e2e8f0")),
-                                    chip2("Пользователь"),
-                                ],
-                            ),
-                            ft.Icon(ft.Icons.NOTIFICATIONS_OUTLINED, color=_c("#ffffff")),
-                        ],
-                    ),
-                    ft.Row(
-                        spacing=14,
-                        controls=[
-                            small_stat2("Устройства", "12/14", "devices"),
-                            small_stat2("Энергия", "2.4 кВт", "energy"),
-                        ],
-                    ),
-                ],
-            ),
-        )
-
-    def home_device_card(d):
-        icon_bg = {
-            "thermostat": _c("#fee2e2"),
-            "light": _c("#fef9c3"),
-            "camera": _c("#dbeafe"),
-            "energy": _c("#dcfce7"),
-        }.get(d["icon"], _c("#e2e8f0"))
-
-        icon_color = {
-            "thermostat": _c("#ef4444"),
-            "light": _c("#f59e0b"),
-            "camera": _c("#2563eb"),
-            "energy": _c("#16a34a"),
-        }.get(d["icon"], _c("#0f172a"))
-
-        top_right = status_dot(
-            "online"
-            if d["status"] == "online"
-            else ("warning" if d["status"] == "warning" else "offline")
-        )
-
-        return ft.Container(
-            expand=True,
-            padding=16,
+            expand=expand,
+            padding=padding,
+            bgcolor=c("card"),
             border_radius=16,
-            bgcolor=C("CARD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=ft.Column(
-                spacing=10,
-                controls=[
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        controls=[
-                            ft.Container(
-                                width=40,
-                                height=40,
-                                border_radius=12,
-                                bgcolor=icon_bg,
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Icon(device_icon(d["icon"]), size=18, color=icon_color),
-                            ),
-                            top_right,
-                        ],
-                    ),
-                    T(f"#{d['id']} · {d['name']}", size=16, weight=ft.FontWeight.BOLD),
-                    TM(d["room"]),
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                        controls=[
-                            T(d["status_text"], size=18, weight=ft.FontWeight.BOLD),
-                            trend_icon(d["trend"]),
-                        ],
-                    ),
-                ],
-            ),
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(spacing=10, controls=list(controls)),
         )
 
-    def home_view():
-        set_appbar_home()
-
-        grid = ft.Column(
-            spacing=12,
-            controls=[
-                *[
-                    ft.Row(spacing=12, controls=[home_device_card(d) for d in device_items[i:i+2]])
-                    for i in range(0, len(device_items), 2)
-                ],
-            ],
+    def field(**kwargs):
+        return ft.TextField(
+            bgcolor=c("field"),
+            color=c("text"),
+            border_color=c("border"),
+            hint_style=ft.TextStyle(color=c("muted")),
+            label_style=ft.TextStyle(color=c("muted")),
+            **kwargs,
         )
 
-        quick_actions = ft.Row(
-            spacing=12,
-            controls=[
-                ft.Container(
-                    expand=True,
-                    padding=14,
-                    border_radius=14,
-                    bgcolor=C("CARD"),
-                    border=ft.border.all(1, C("BORDER")),
-                    alignment=ft.Alignment(0, 0),
-                    content=ft.Row(
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=10,
-                        controls=[ft.Icon(ft.Icons.SCHEDULE, color=C("TEXT")), T("Сценарии", weight=ft.FontWeight.BOLD)],
-                    ),
-                    on_click=lambda e: (state.update(tab=3), build_root()),
-                ),
-                ft.Container(
-                    expand=True,
-                    padding=14,
-                    border_radius=14,
-                    bgcolor=C("CARD"),
-                    border=ft.border.all(1, C("BORDER")),
-                    alignment=ft.Alignment(0, 0),
-                    content=ft.Row(
-                        alignment=ft.MainAxisAlignment.CENTER,
-                        spacing=10,
-                        controls=[ft.Icon(ft.Icons.BOLT, color=C("TEXT")), T("Энергия", weight=ft.FontWeight.BOLD)],
-                    ),
-                    on_click=lambda e: toast(page, "Энергия (макет)"),
-                ),
-            ],
+    def dropdown(**kwargs):
+        return ft.Dropdown(
+            bgcolor=c("field"),
+            border_color=c("border"),
+            **kwargs,
         )
 
-        events = ft.Column(
-            spacing=10,
-            controls=[
-                card2(
-                    ft.Row(
-                        spacing=12,
-                        controls=[
-                            ft.Container(
-                                width=34,
-                                height=34,
-                                border_radius=12,
-                                bgcolor=_c("#fef9c3"),
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Icon(ft.Icons.NOTIFICATIONS, color=_c("#f59e0b"), size=18),
-                            ),
-                            ft.Column(
-                                spacing=2,
-                                controls=[
-                                    T("Высокое энергопотребление", weight=ft.FontWeight.BOLD),
-                                    TM("5 мин назад", size=12),
-                                ],
-                            ),
-                        ],
-                    ),
-                    padding=14,
-                ),
-                card2(
-                    ft.Row(
-                        spacing=12,
-                        controls=[
-                            ft.Container(
-                                width=34,
-                                height=34,
-                                border_radius=12,
-                                bgcolor=_c("#dbeafe"),
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Icon(ft.Icons.VIDEOCAM, color=_c("#2563eb"), size=18),
-                            ),
-                            ft.Column(
-                                spacing=2,
-                                controls=[
-                                    T("Камера обнаружила движение", weight=ft.FontWeight.BOLD),
-                                    TM("15 мин назад", size=12),
-                                ],
-                            ),
-                        ],
-                    ),
-                    padding=14,
-                ),
-                card2(
-                    ft.Row(
-                        spacing=12,
-                        controls=[
-                            ft.Container(
-                                width=34,
-                                height=34,
-                                border_radius=12,
-                                bgcolor=_c("#dcfce7"),
-                                alignment=ft.Alignment(0, 0),
-                                content=ft.Icon(ft.Icons.CHECK_CIRCLE, color=_c("#16a34a"), size=18),
-                            ),
-                            ft.Column(
-                                spacing=2,
-                                controls=[
-                                    T('Активирован сценарий "Ночной режим"', weight=ft.FontWeight.BOLD),
-                                    TM("2 часа назад", size=12),
-                                ],
-                            ),
-                        ],
-                    ),
-                    padding=14,
-                ),
-            ],
-        )
-
-        content.content = ft.Column(
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            spacing=18,
-            controls=[
-                header_gradient_block(),
-                ft.Row(
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    controls=[
-                        T("Устройства", size=18, weight=ft.FontWeight.BOLD),
-                        ft.TextButton("Все  >", on_click=lambda e: (state.update(tab=1), build_root())),
-                    ],
-                ),
-                grid,
-                T("Быстрые действия", size=18, weight=ft.FontWeight.BOLD),
-                quick_actions,
-                ft.Row(
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    controls=[
-                        T("Последние события", size=18, weight=ft.FontWeight.BOLD),
-                        ft.TextButton("Все  >", on_click=lambda e: (state.update(tab=2), build_root())),
-                    ],
-                ),
-                events,
-                ft.Container(height=10),
-            ],
-        )
+    def show_message(text: str):
+        page.snack_bar = ft.SnackBar(ft.Text(text))
+        page.snack_bar.open = True
         page.update()
 
-    def devices_view():
-        set_appbar_home()
+    def show_dialog(dialog: ft.AlertDialog):
+        if dialog not in page.overlay:
+            page.overlay.append(dialog)
+        page.dialog = dialog
+        dialog.open = True
+        page.update()
 
-        search = themed_field(
-            hint_text="Поиск по названию или комнате...",
-            prefix_icon=ft.Icons.SEARCH,
+    def close_dialog(dialog: ft.AlertDialog):
+        dialog.open = False
+        page.update()
+
+    def api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: int = 10):
+        url = f"{API_BASE}{path}"
+        try:
+            response = requests.request(method=method.upper(), url=url, json=payload, timeout=timeout)
+            if response.status_code >= 400:
+                try:
+                    error_data = response.json()
+                except Exception:
+                    error_data = {}
+                message = error_data.get("message") or error_data.get("error") or f"HTTP {response.status_code}"
+                raise RuntimeError(message)
+            if not response.text:
+                return None
+            return response.json()
+        except requests.RequestException as ex:
+            raise RuntimeError(f"API недоступен: {ex}") from ex
+
+    def load_devices(show_error: bool = False):
+        try:
+            items = api_request("get", "/api/devices") or []
+            data["devices"] = items if isinstance(items, list) else []
+        except Exception as ex:
+            if show_error:
+                show_message(str(ex))
+
+    def load_rooms(show_error: bool = False):
+        try:
+            items = api_request("get", "/api/rooms") or []
+            data["rooms"] = items if isinstance(items, list) else []
+        except Exception as ex:
+            if show_error:
+                show_message(str(ex))
+
+    def load_scenes(show_error: bool = False):
+        try:
+            items = api_request("get", "/api/scenes") or []
+            data["scenes"] = items if isinstance(items, list) else []
+        except Exception as ex:
+            if show_error:
+                show_message(str(ex))
+
+    def load_logs(show_error: bool = False):
+        try:
+            items = api_request("get", "/api/logs?limit=50") or []
+            data["logs"] = items if isinstance(items, list) else []
+        except Exception as ex:
+            if show_error:
+                show_message(str(ex))
+
+    def refresh_all(show_toast: bool = False):
+        load_rooms(show_error=True)
+        load_devices(show_error=True)
+        load_scenes(show_error=True)
+        load_logs(show_error=True)
+        if show_toast:
+            show_message("Данные обновлены")
+
+    def room_options() -> list[ft.dropdown.Option]:
+        return [ft.dropdown.Option(str(room["id"]), room["name"]) for room in data["rooms"]]
+
+    def find_room_name(room_id: int | None) -> str:
+        for room in data["rooms"]:
+            if room.get("id") == room_id:
+                return str(room.get("name", "Комната"))
+        return "Комната не указана"
+
+    def stat_card(title: str, value: str, icon: str, tab_index: int | None = None):
+        box = ft.Container(
+            expand=True,
+            padding=16,
+            bgcolor=c("card"),
+            border_radius=16,
+            border=ft.border.all(1, c("border")),
+            content=ft.Row(
+                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                controls=[
+                    ft.Column(spacing=6, controls=[TM(title, size=12), T(value, size=24, weight=ft.FontWeight.BOLD)]),
+                    ft.Icon(icon, size=30, color=c("accent")),
+                ],
+            ),
+            on_click=(lambda e: switch_tab(tab_index)) if tab_index is not None else None,
         )
-        dd_type = themed_dropdown(
-            value="Все типы",
-            options=[
-                ft.dropdown.Option("Все типы"),
-                *[ft.dropdown.Option(x) for x in DEVICE_TYPES],
+        return box
+
+    def switch_tab(index: int):
+        state["tab"] = index
+        build()
+
+    def confirm_action(title: str, message: str, action):
+        dialog_ref = None
+
+        def on_yes(_):
+            nonlocal dialog_ref
+            if dialog_ref is not None:
+                close_dialog(dialog_ref)
+            action()
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T(title, weight=ft.FontWeight.BOLD),
+            content=TM(message),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Подтвердить", on_click=on_yes),
             ],
-            expand=True,
         )
-        dd_status = themed_dropdown(
-            value="Все статусы",
-            options=[
-                ft.dropdown.Option("Все статусы"),
-                ft.dropdown.Option("Онлайн"),
-                ft.dropdown.Option("Предупреждение"),
-                ft.dropdown.Option("Оффлайн"),
-            ],
-            expand=True,
-        )
+        dialog_ref = dialog
+        show_dialog(dialog)
 
-        seg_grid = ft.ElevatedButton(
-            "Сетка",
-            expand=True,
-            bgcolor=_c("#0b1020"),
-            color=_c("#ffffff"),
-            on_click=lambda e: toast(page, "Пока макет (сетку можно сделать позже)"),
-        )
-        seg_table = ft.OutlinedButton("Таблица", expand=True, on_click=lambda e: toast(page, "Пока макет"))
-
-        add_name_tf = themed_field(label="Название", hint_text="Например: Лампа IKEA")
-        add_room_tf = themed_field(label="Комната", hint_text="Например: Спальня")
-        add_type_dd = themed_dropdown(
+    def open_device_dialog():
+        name_tf = field(label="Название", hint_text="Например: Лампа IKEA")
+        room_tf = field(label="Комната", hint_text="Например: Спальня")
+        type_dd = dropdown(
             label="Тип устройства",
             value=DEVICE_TYPES[0],
             options=[ft.dropdown.Option(x) for x in DEVICE_TYPES],
         )
-        add_is_on_sw = ft.Switch(label="Включить сразу", value=False)
+        is_on_sw = ft.Switch(label="Включить сразу", value=False)
 
-        mode_group = ft.RadioGroup(
-            value="local",
-            content=ft.Row(
-                controls=[
-                    ft.Radio(value="local", label="Локальное устройство"),
-                    ft.Radio(value="real", label="Реальное устройство"),
-                ]
-            ),
+        def save(_):
+            try:
+                payload = {
+                    "name": (name_tf.value or "").strip(),
+                    "room": (room_tf.value or "").strip(),
+                    "isOn": bool(is_on_sw.value),
+                    "type": type_dd.value or "Другое",
+                    "provider": "mock",
+                    "connection": {},
+                }
+                api_request("post", "/api/devices", payload)
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                show_message("Устройство добавлено")
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
+            content=ft.Column(tight=True, spacing=10, controls=[name_tf, room_tf, type_dd, is_on_sw]),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Сохранить", on_click=save),
+            ],
         )
-        provider_dd = themed_dropdown(
-            label="Источник / интеграция",
-            value="mock",
-            options=[ft.dropdown.Option(k, v) for k, v in PROVIDER_LABELS.items()],
-            visible=False,
+        show_dialog(dialog)
+
+    def move_device(device_id: int, room_id_value: str | None):
+        if not room_id_value:
+            show_message("Выбери комнату")
+            return
+        try:
+            api_request("put", f"/api/devices/{device_id}/room", {"roomId": int(room_id_value)})
+            refresh_all()
+            build()
+            show_message("Привязка устройства обновлена")
+        except Exception as ex:
+            show_message(str(ex))
+
+    def toggle_device(device_id: int):
+        try:
+            api_request("put", f"/api/devices/{device_id}/toggle")
+            refresh_all()
+            build()
+        except Exception as ex:
+            show_message(str(ex))
+
+    def delete_device(device_id: int, device_name: str):
+        def action():
+            try:
+                api_request("delete", f"/api/devices/{device_id}")
+                refresh_all()
+                build()
+                show_message(f"Устройство удалено: {device_name}")
+            except Exception as ex:
+                show_message(str(ex))
+
+        confirm_action("Удалить устройство", f"Удалить устройство «{device_name}»?", action)
+
+    def open_room_dialog(room: dict[str, Any] | None = None):
+        editing = room is not None
+        name_tf = field(label="Название комнаты", value=(room or {}).get("name", ""))
+        zone_tf = field(label="Зона", value=(room or {}).get("zone", ""), hint_text="Например: Первый этаж")
+
+        def save(_):
+            try:
+                payload = {"name": (name_tf.value or "").strip(), "zone": (zone_tf.value or "").strip()}
+                if editing:
+                    api_request("put", f"/api/rooms/{room['id']}", payload)
+                    message = "Комната обновлена"
+                else:
+                    api_request("post", "/api/rooms", payload)
+                    message = "Комната создана"
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                show_message(message)
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Изменить комнату" if editing else "Создать комнату", weight=ft.FontWeight.BOLD),
+            content=ft.Column(tight=True, spacing=10, controls=[name_tf, zone_tf]),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Сохранить", on_click=save),
+            ],
         )
-        connection_fields_column = ft.Column(spacing=10, visible=False)
-        connection_inputs: dict[str, ft.TextField] = {}
+        show_dialog(dialog)
 
-        def update_connection_fields(provider_key: str):
-            debug_log(f"Update connection fields for provider={provider_key}")
-            connection_inputs.clear()
-            fields = PROVIDER_FIELDS.get(provider_key, [])
-            controls = []
-            for key in fields:
-                tf = themed_field(
-                    label=CONNECTION_FIELD_LABELS.get(key, key),
-                    hint_text=f"Введите {CONNECTION_FIELD_LABELS.get(key, key)}",
-                )
-                connection_inputs[key] = tf
-                controls.append(tf)
-            connection_fields_column.controls = controls
-            connection_fields_column.visible = bool(fields)
+    def delete_room(room_id: int, room_name: str):
+        def action():
+            try:
+                api_request("delete", f"/api/rooms/{room_id}")
+                refresh_all()
+                build()
+                show_message(f"Комната удалена: {room_name}")
+            except Exception as ex:
+                show_message(str(ex))
 
-        def collect_connection_values(provider_key: str):
-            fields = PROVIDER_FIELDS.get(provider_key, [])
-            return {key: ((connection_inputs.get(key).value if connection_inputs.get(key) else "") or "") for key in fields}
+        confirm_action("Удалить комнату", f"Удалить комнату «{room_name}»?", action)
 
-        def validate_add_form(name: str, room: str, device_type: str, provider_key: str, connection: dict):
-            if not name.strip() or not room.strip() or not device_type.strip():
-                toast(page, "Заполните название, комнату и тип")
-                return False
-            if provider_key != "mock":
-                required = PROVIDER_FIELDS.get(provider_key, [])
-                missing = [k for k in required if not str(connection.get(k, "")).strip()]
-                if missing:
-                    toast(page, "Заполните обязательные поля подключения")
-                    debug_log(f"Validation failed: missing fields {missing}")
-                    return False
-            return True
+    def open_scene_dialog(scene: dict[str, Any] | None = None):
+        editing = scene is not None
+        existing_actions = {}
+        if scene:
+            for action in scene.get("actions", []):
+                existing_actions[action.get("deviceId")] = "on" if action.get("targetIsOn") else "off"
 
-        def on_mode_change(_):
-            is_real_mode = mode_group.value == "real"
-            debug_log(f"Add device mode changed: {'real' if is_real_mode else 'local'}")
-            provider_dd.visible = is_real_mode
-            if not is_real_mode:
-                provider_dd.value = "mock"
-                connection_fields_column.visible = False
-                connection_fields_column.controls = []
-                connection_inputs.clear()
-            else:
-                if provider_dd.value == "mock":
-                    provider_dd.value = "home_assistant"
-                update_connection_fields(provider_dd.value)
-            page.update()
+        name_tf = field(label="Название сценария", value=(scene or {}).get("name", ""))
+        description_tf = field(
+            label="Описание",
+            multiline=True,
+            min_lines=2,
+            max_lines=4,
+            value=(scene or {}).get("description", ""),
+        )
 
-        def on_provider_change(_):
-            debug_log(f"Add device provider changed: {provider_dd.value}")
-            update_connection_fields(provider_dd.value)
-            page.update()
-
-        def show_dialog(dialog):
-            if dialog not in page.overlay:
-                page.overlay.append(dialog)
-            page.open(dialog)
-            page.update()
-
-        def close_dialog(dialog):
-            page.close(dialog)
-            page.update()
-
-        def open_add_device_dialog(_):
-            debug_log("Add device button clicked")
-            add_name_tf.value = ""
-            add_room_tf.value = ""
-            add_type_dd.value = DEVICE_TYPES[0]
-            add_is_on_sw.value = False
-            mode_group.value = "local"
-            provider_dd.value = "mock"
-            provider_dd.visible = False
-            connection_fields_column.visible = False
-            connection_fields_column.controls = []
-            connection_inputs.clear()
-            dialog_ref = None
-
-            def cancel_add_device(_):
-                if dialog_ref is not None:
-                    close_dialog(dialog_ref)
-
-            def on_save_click(_):
-                debug_log("Add device dialog: save clicked")
-                provider_value = provider_dd.value if mode_group.value == "real" else "mock"
-                connection_data = collect_connection_values(provider_value)
-                debug_log(f"Add device form data: mode={mode_group.value}, provider={provider_value}, connection={connection_data}")
-                if not validate_add_form(add_name_tf.value or "", add_room_tf.value or "", add_type_dd.value or "", provider_value, connection_data):
-                    return
-                success = add_device_via_api(
-                    add_name_tf.value or "",
-                    add_room_tf.value or "",
-                    bool(add_is_on_sw.value),
-                    add_type_dd.value or "Другое",
-                    provider_value,
-                    connection_data if provider_value != "mock" else {},
-                )
-                if success and dialog_ref is not None:
-                    close_dialog(dialog_ref)
-
-            def on_test_connection_click(_):
-                provider_value = provider_dd.value if mode_group.value == "real" else "mock"
-                debug_log(f"Test connection click: provider={provider_value}")
-                if provider_value == "mock":
-                    toast(page, "Локальное устройство не требует проверки подключения")
-                    return
-                connection_data = collect_connection_values(provider_value)
-                if not validate_add_form(
-                    add_name_tf.value or "tmp",
-                    add_room_tf.value or "tmp",
-                    add_type_dd.value or DEVICE_TYPES[0],
-                    provider_value,
-                    connection_data,
-                ):
-                    return
-                validate_connection_via_api(provider_value, connection_data)
-
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
-                content=ft.Column(
-                    tight=True,
-                    spacing=10,
-                    controls=[
-                        add_name_tf,
-                        add_room_tf,
-                        add_type_dd,
-                        mode_group,
-                        provider_dd,
-                        connection_fields_column,
-                        add_is_on_sw,
-                    ],
-                ),
-                actions=[
-                    ft.OutlinedButton("Тест подключения", on_click=on_test_connection_click),
-                    ft.TextButton("Отмена", on_click=cancel_add_device),
-                    ft.ElevatedButton("Сохранить", on_click=on_save_click),
+        device_controls: list[tuple[dict[str, Any], ft.Dropdown]] = []
+        action_rows: list[ft.Control] = []
+        for device in data["devices"]:
+            initial = existing_actions.get(device.get("id"), "skip")
+            dd = dropdown(
+                value=initial,
+                width=180,
+                options=[
+                    ft.dropdown.Option("skip", "Не использовать"),
+                    ft.dropdown.Option("on", "Включить"),
+                    ft.dropdown.Option("off", "Выключить"),
                 ],
-                actions_alignment=ft.MainAxisAlignment.END,
             )
-
-            mode_group.on_change = on_mode_change
-            provider_dd.on_change = on_provider_change
-
-            dialog_ref = dialog
-            show_dialog(dialog)
-            debug_log(f"Add device dialog opened; overlay_size={len(page.overlay)}; open={dialog.open}")
-
-        add_btn = ft.ElevatedButton(
-            "Добавить устройство",
-            icon=ft.Icons.ADD,
-            bgcolor=_c("#0b1020"),
-            color=_c("#ffffff"),
-            height=44,
-            on_click=open_add_device_dialog,
-        )
-        refresh_btn = ft.OutlinedButton(
-            "Обновить",
-            icon=ft.Icons.REFRESH,
-            on_click=lambda e: (load_devices_from_api(show_error=True), build_root()),
-            height=44,
-        )
-
-        add_form = ft.Container(
-            visible=state.get("show_add_form", False),
-            padding=16,
-            border_radius=16,
-            bgcolor=C("CARD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=ft.Column(
-                spacing=10,
-                controls=[
-                    T("Новое устройство", size=18, weight=ft.FontWeight.BOLD),
-                    add_name_tf,
-                    add_room_tf,
-                    add_is_on_sw,
-                    ft.Row(
-                        alignment=ft.MainAxisAlignment.END,
-                        controls=[
-                            ft.TextButton("Отмена", on_click=cancel_add_device),
-                            ft.ElevatedButton("Сохранить", on_click=submit_add_device),
-                        ],
-                    ),
-                ],
-            ),
-        )
-
-        def device_row(d):
-            badge_text = "Онлайн" if d["status"] == "online" else ("Предупреждение" if d["status"] == "warning" else "Оффлайн")
-            badge_bg = _c("#dcfce7") if d["status"] == "online" else (_c("#fef3c7") if d["status"] == "warning" else _c("#e2e8f0"))
-            badge_fg = _c("#16a34a") if d["status"] == "online" else (_c("#b45309") if d["status"] == "warning" else _c("#475569"))
-
-            return ft.Container(
-                padding=16,
-                border_radius=16,
-                bgcolor=C("CARD"),
-                border=ft.border.all(1, C("BORDER")),
-                content=ft.Column(
-                    spacing=12,
-                    controls=[
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            controls=[
-                                ft.Row(
-                                    spacing=12,
-                                    controls=[
-                                        ft.Container(
-                                            width=44,
-                                            height=44,
-                                            border_radius=14,
-                                            bgcolor=C("FIELD"),
-                                            alignment=ft.Alignment(0, 0),
-                                            content=ft.Icon(device_icon(d["icon"]), color=_c("#2563eb")),
-                                        ),
-                                        ft.Column(
-                                            spacing=2,
-                                            controls=[
-                                                T(d["name"], size=16, weight=ft.FontWeight.BOLD),
-                                                TM(d["room"], size=12),
-                                                TM(f"Тип: {d.get('type', 'Другое')}", size=12),
-                                            ],
-                                        ),
-                                    ],
-                                ),
-                                ft.Container(
-                                    padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                                    border_radius=999,
-                                    bgcolor=badge_bg,
-                                    content=ft.Text(badge_text, size=12, color=badge_fg, weight=ft.FontWeight.W_600),
-                                ),
-                            ],
-                        ),
-                        T(f"Устройство #{d['id']}", size=13, weight=ft.FontWeight.W_600, color=C("MUTED")),
-                        T(d["status_text"], size=24, weight=ft.FontWeight.BOLD),
-                        TM("Обновлено: 2026-01-23 09:15", size=12),
-                        ft.Row(
-                            spacing=10,
-                            controls=[
-                                ft.ElevatedButton(
-                                    "Toggle",
-                                    icon=ft.Icons.POWER_SETTINGS_NEW,
-                                    expand=True,
-                                    on_click=lambda e, device_id=d["id"]: toggle_device_via_api(device_id),
-                                ),
-                                ft.OutlinedButton(
-                                    "Удалить",
-                                    icon=ft.Icons.DELETE_OUTLINE,
-                                    on_click=lambda e, device_id=d["id"]: delete_device_via_api(device_id),
-                                ),
-                            ],
-                        ),
-                    ],
-                ),
-            )
-
-        content.content = ft.Column(
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            spacing=14,
-            controls=[
-                T("Управление устройствами", size=22, weight=ft.FontWeight.BOLD),
-                TM(f"Всего устройств: {len(device_items)}"),
-                search,
-                ft.Row(spacing=12, controls=[dd_type, dd_status]),
-                ft.Row(spacing=12, controls=[seg_grid, seg_table]),
-                ft.Row(spacing=12, controls=[add_btn, refresh_btn]),
-                add_form,
-                *[device_row(d) for d in device_items],
-                ft.Container(height=10),
-            ],
-        )
-        page.update()
-
-    def rooms_view():
-        set_appbar_home()
-
-        def room_devices(room_name: str):
-            return [d for d in device_items if str(d.get("room", "")).strip().lower() == room_name.strip().lower()]
-
-        def open_add_room_dialog(_):
-            room_name_tf = themed_field(label="Название комнаты", hint_text="Например: Детская")
-            dialog_ref = None
-
-            def cancel(_):
-                if dialog_ref is not None:
-                    page.close(dialog_ref)
-                    page.update()
-
-            def save(_):
-                if not (room_name_tf.value or "").strip():
-                    toast(page, "Введите название комнаты")
-                    return
-                if create_room_via_api(room_name_tf.value or ""):
-                    build_root()
-                    cancel(_)
-
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=T("Создать комнату", weight=ft.FontWeight.BOLD),
-                content=ft.Column(tight=True, spacing=10, controls=[room_name_tf]),
-                actions=[ft.TextButton("Отмена", on_click=cancel), ft.ElevatedButton("Сохранить", on_click=save)],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-            dialog_ref = dialog
-            if dialog not in page.overlay:
-                page.overlay.append(dialog)
-            page.open(dialog)
-            page.update()
-
-        def room_card(room: dict):
-            devices_in_room = room_devices(str(room.get("name", "")))
-            room_id = int(room.get("id", 0))
-            room_name = str(room.get("name", ""))
-
-            def on_rename(_):
-                room_name_tf = themed_field(label="Новое название", value=room_name)
-                dialog_ref = None
-
-                def cancel(e):
-                    if dialog_ref is not None:
-                        page.close(dialog_ref)
-                        page.update()
-
-                def save(e):
-                    if rename_room_via_api(room_id, room_name_tf.value or ""):
-                        build_root()
-                        cancel(e)
-
-                dialog = ft.AlertDialog(
-                    modal=True,
-                    title=T("Переименовать комнату", weight=ft.FontWeight.BOLD),
-                    content=ft.Column(tight=True, controls=[room_name_tf]),
-                    actions=[ft.TextButton("Отмена", on_click=cancel), ft.ElevatedButton("Сохранить", on_click=save)],
-                )
-                dialog_ref = dialog
-                if dialog not in page.overlay:
-                    page.overlay.append(dialog)
-                page.open(dialog)
-                page.update()
-
-            return ft.Container(
-                padding=16,
-                border_radius=16,
-                bgcolor=C("CARD"),
-                border=ft.border.all(1, C("BORDER")),
-                content=ft.Column(
-                    spacing=10,
-                    controls=[
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            controls=[
-                                T(room_name, size=18, weight=ft.FontWeight.BOLD),
-                                badge2(f"{len(devices_in_room)} устройств"),
-                            ],
-                        ),
-                        TM("Устройства в комнате:", size=12),
-                        ft.Column(
-                            spacing=4,
-                            controls=[TM(f"• {d['name']} (#{d['id']})", size=12) for d in devices_in_room[:6]]
-                            or [TM("Пока нет устройств", size=12)],
-                        ),
-                        ft.Row(
-                            spacing=10,
-                            controls=[
-                                ft.OutlinedButton("Переименовать", icon=ft.Icons.EDIT, on_click=on_rename),
-                                ft.OutlinedButton(
-                                    "Удалить",
-                                    icon=ft.Icons.DELETE_OUTLINE,
-                                    on_click=lambda e, rid=room_id: (delete_room_via_api(rid), build_root()),
-                                ),
-                            ],
-                        ),
-                    ],
-                ),
-            )
-
-        device_dd = themed_dropdown(
-            label="Устройство",
-            options=[ft.dropdown.Option(str(d["id"]), f"#{d['id']} · {d['name']}") for d in device_items],
-        )
-        room_dd = themed_dropdown(
-            label="Комната",
-            options=[ft.dropdown.Option(str(r.get("id")), str(r.get("name"))) for r in rooms_items],
-        )
-
-        bind_block = card2(
-            ft.Column(
-                spacing=10,
-                controls=[
-                    T("Изменить привязку устройства", size=16, weight=ft.FontWeight.BOLD),
-                    ft.Row(spacing=12, controls=[device_dd, room_dd]),
-                    ft.ElevatedButton(
-                        "Применить",
-                        icon=ft.Icons.SYNC_ALT,
-                        on_click=lambda e: (
-                            reassign_device_room_via_api(int(device_dd.value), int(room_dd.value))
-                            if device_dd.value and room_dd.value
-                            else toast(page, "Выберите устройство и комнату")
-                        ),
-                    ),
-                ],
-            ),
-            padding=16,
-        )
-
-        content.content = ft.Column(
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            spacing=14,
-            controls=[
-                T("Комнаты и зоны", size=22, weight=ft.FontWeight.BOLD),
-                TM("Создание комнат, группировка и привязка устройств"),
+            device_controls.append((device, dd))
+            action_rows.append(
                 ft.Row(
-                    spacing=10,
-                    controls=[
-                        ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD_HOME, on_click=open_add_room_dialog),
-                        ft.OutlinedButton(
-                            "Обновить",
-                            icon=ft.Icons.REFRESH,
-                            on_click=lambda e: (load_rooms_from_api(show_error=True), load_devices_from_api(show_error=True), build_root()),
-                        ),
-                    ],
-                ),
-                bind_block,
-                *[room_card(room) for room in rooms_items],
-                ft.Container(height=10),
-            ],
-        )
-        page.update()
-
-    def scenes_view():
-        set_appbar_home()
-
-        def open_scene_dialog(existing: dict | None = None):
-            is_edit = existing is not None
-            name_tf = themed_field(label="Название сценария", value=str(existing.get("name", "")) if existing else "")
-            desc_tf = themed_field(label="Описание", value=str(existing.get("description", "")) if existing else "")
-            action_rows: list[tuple[ft.Dropdown, ft.Dropdown]] = []
-            actions_column = ft.Column(spacing=8)
-            dialog_ref = None
-
-            def add_action_row(device_id: str | None = None, state_value: str | None = None):
-                device_dd = themed_dropdown(
-                    label="Устройство",
-                    width=280,
-                    value=device_id,
-                    options=[ft.dropdown.Option(str(d["id"]), f"#{d['id']} · {d['name']}") for d in device_items],
-                )
-                state_dd = themed_dropdown(
-                    label="Состояние",
-                    width=180,
-                    value=state_value or "on",
-                    options=[ft.dropdown.Option("on", "Включить"), ft.dropdown.Option("off", "Выключить")],
-                )
-                action_rows.append((device_dd, state_dd))
-                actions_column.controls.append(ft.Row(spacing=10, controls=[device_dd, state_dd]))
-
-            if existing and isinstance(existing.get("actions"), list) and existing.get("actions"):
-                for action in existing.get("actions"):
-                    add_action_row(str(action.get("deviceId")), "on" if action.get("isOn") else "off")
-            else:
-                add_action_row()
-
-            def cancel(_):
-                if dialog_ref is not None:
-                    page.close(dialog_ref)
-                    page.update()
-
-            def save(_):
-                actions = []
-                for device_dd, state_dd in action_rows:
-                    if not device_dd.value:
-                        continue
-                    actions.append({"deviceId": int(device_dd.value), "isOn": (state_dd.value or "on") == "on"})
-
-                if not (name_tf.value or "").strip() or len(actions) == 0:
-                    toast(page, "Заполните название и хотя бы одно действие")
-                    return
-
-                payload = {"name": (name_tf.value or "").strip(), "description": (desc_tf.value or "").strip(), "actions": actions}
-                ok = update_scene_via_api(int(existing["id"]), payload) if is_edit else create_scene_via_api(payload)
-                if ok:
-                    build_root()
-                    cancel(_)
-
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=T("Редактировать сценарий" if is_edit else "Создать сценарий", weight=ft.FontWeight.BOLD),
-                content=ft.Column(
-                    tight=True,
-                    spacing=10,
-                    controls=[
-                        name_tf,
-                        desc_tf,
-                        T("Действия", weight=ft.FontWeight.BOLD),
-                        actions_column,
-                        ft.TextButton("Добавить действие", icon=ft.Icons.ADD, on_click=lambda e: (add_action_row(), page.update())),
-                    ],
-                ),
-                actions=[ft.TextButton("Отмена", on_click=cancel), ft.ElevatedButton("Сохранить", on_click=save)],
-                actions_alignment=ft.MainAxisAlignment.END,
-            )
-            dialog_ref = dialog
-            if dialog not in page.overlay:
-                page.overlay.append(dialog)
-            page.open(dialog)
-            page.update()
-
-        def scene_card(scene: dict):
-            scene_id = int(scene.get("id", 0))
-            actions = scene.get("actions", []) if isinstance(scene.get("actions"), list) else []
-            return ft.Container(
-                padding=16,
-                border_radius=16,
-                bgcolor=C("CARD"),
-                border=ft.border.all(1, C("BORDER")),
-                content=ft.Column(
-                    spacing=10,
-                    controls=[
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            controls=[
-                                T(str(scene.get("name", "Без названия")), size=18, weight=ft.FontWeight.BOLD),
-                                badge2(f"{len(actions)} действий"),
-                            ],
-                        ),
-                        TM(str(scene.get("description", "") or "Без описания"), size=12),
-                        ft.Column(
-                            spacing=4,
-                            controls=[
-                                TM(f"• Устройство #{a.get('deviceId')} -> {'ВКЛ' if a.get('isOn') else 'ВЫКЛ'}", size=12)
-                                for a in actions[:6]
-                            ]
-                            or [TM("Действия отсутствуют", size=12)],
-                        ),
-                        ft.Row(
-                            spacing=10,
-                            controls=[
-                                ft.ElevatedButton(
-                                    "Запустить",
-                                    icon=ft.Icons.PLAY_ARROW,
-                                    on_click=lambda e, sid=scene_id: (run_scene_via_api(sid), build_root()),
-                                ),
-                                ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT, on_click=lambda e, s=scene: open_scene_dialog(s)),
-                                ft.OutlinedButton(
-                                    "Удалить",
-                                    icon=ft.Icons.DELETE_OUTLINE,
-                                    on_click=lambda e, sid=scene_id: (delete_scene_via_api(sid), build_root()),
-                                ),
-                            ],
-                        ),
-                    ],
-                ),
-            )
-
-        execution_cards = [
-            card2(
-                ft.Column(
-                    spacing=6,
-                    controls=[
-                        T(f"#{log.get('id')} · {log.get('sceneName', 'Сценарий')}", weight=ft.FontWeight.BOLD),
-                        TM(f"Статус: {log.get('status', '-')}", size=12),
-                    ],
-                ),
-                padding=12,
-            )
-            for log in scene_logs_items[:8]
-        ]
-
-        content.content = ft.Column(
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            spacing=14,
-            controls=[
-                T("Сценарии (сцены)", size=22, weight=ft.FontWeight.BOLD),
-                TM("Создание и запуск наборов действий"),
-                ft.Row(
-                    spacing=10,
-                    controls=[
-                        ft.ElevatedButton("Создать сценарий", icon=ft.Icons.ADD, on_click=lambda e: open_scene_dialog()),
-                        ft.OutlinedButton(
-                            "Обновить",
-                            icon=ft.Icons.REFRESH,
-                            on_click=lambda e: (load_scenes_from_api(show_error=True), load_scene_logs_from_api(show_error=True), build_root()),
-                        ),
-                    ],
-                ),
-                *[scene_card(scene) for scene in scenes_items],
-                T("Статусы выполнения", size=16, weight=ft.FontWeight.BOLD),
-                *(execution_cards or [TM("Запусков пока нет", size=12)]),
-                ft.Container(height=10),
-            ],
-        )
-        page.update()
-
-    def history_view():
-        set_appbar_home()
-
-        search = themed_field(
-            hint_text="Поиск по пользователю, устройству или деталям...",
-            prefix_icon=ft.Icons.SEARCH,
-        )
-        dd_actions = themed_dropdown(
-            value="Все действия",
-            options=[
-                ft.dropdown.Option("Все действия"),
-                ft.dropdown.Option("Изменение"),
-                ft.dropdown.Option("Включение"),
-                ft.dropdown.Option("Выключение"),
-                ft.dropdown.Option("Создание"),
-                ft.dropdown.Option("Предупреждение"),
-            ],
-            expand=True,
-        )
-
-        def set_history_mode(mode: str):
-            state["history_mode"] = mode
-            build_root()
-
-        btn_list = ft.ElevatedButton(
-            "Список",
-            expand=True,
-            bgcolor=_c("#0b1020") if state["history_mode"] == "list" else None,
-            color=_c("#ffffff") if state["history_mode"] == "list" else None,
-            on_click=lambda e: set_history_mode("list"),
-        )
-        btn_table = ft.ElevatedButton(
-            "Таблица",
-            expand=True,
-            bgcolor=_c("#0b1020") if state["history_mode"] == "table" else None,
-            color=_c("#ffffff") if state["history_mode"] == "table" else None,
-            on_click=lambda e: set_history_mode("table"),
-        )
-
-        stats = ft.Row(
-            spacing=12,
-            controls=[
-                card2(
-                    ft.Column(
-                        [T("12", size=22, weight=ft.FontWeight.BOLD), TM("Записей", size=12)],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=18,
-                ),
-                card2(
-                    ft.Column(
-                        [T("3", size=22, weight=ft.FontWeight.BOLD), TM("Пользователей", size=12)],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=18,
-                ),
-                card2(
-                    ft.Column(
-                        [T("11", size=22, weight=ft.FontWeight.BOLD), TM("Устройств", size=12)],
-                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                    ),
-                    padding=18,
-                ),
-            ],
-        )
-
-        def tag_color(tc: str):
-            return {
-                "blue": _c("#dbeafe"),
-                "green": _c("#dcfce7"),
-                "purple": _c("#f3e8ff"),
-                "gray": _c("#e2e8f0"),
-                "orange": _c("#ffedd5"),
-            }.get(tc, _c("#e2e8f0"))
-
-        def tag_text_color(tc: str):
-            return {
-                "blue": _c("#2563eb"),
-                "green": _c("#16a34a"),
-                "purple": _c("#9333ea"),
-                "gray": _c("#334155"),
-                "orange": _c("#c2410c"),
-            }.get(tc, _c("#334155"))
-
-        def history_item(x):
-            return ft.Container(
-                padding=16,
-                border_radius=16,
-                bgcolor=C("CARD"),
-                border=ft.border.all(1, C("BORDER")),
-                content=ft.Column(
-                    spacing=8,
-                    controls=[
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            controls=[
-                                ft.Row(
-                                    spacing=10,
-                                    controls=[
-                                        ft.Container(
-                                            padding=ft.padding.symmetric(horizontal=10, vertical=6),
-                                            border_radius=999,
-                                            bgcolor=tag_color(x["tag_color"]),
-                                            content=ft.Text(
-                                                x["action"],
-                                                size=12,
-                                                color=tag_text_color(x["tag_color"]),
-                                                weight=ft.FontWeight.W_600,
-                                            ),
-                                        ),
-                                        T(x["device"], weight=ft.FontWeight.BOLD),
-                                    ],
-                                ),
-                                ft.Row(
-                                    spacing=8,
-                                    controls=[
-                                        ft.Icon(ft.Icons.PERSON, size=16, color=_c("#2563eb")),
-                                        TM(x["user"]),
-                                    ],
-                                ),
-                            ],
-                        ),
-                        T(x["details"], color=C("TEXT")),
-                        ft.Row(
-                            spacing=8,
-                            controls=[
-                                ft.Icon(ft.Icons.CALENDAR_MONTH, size=16, color=C("MUTED")),
-                                TM(x["ts"].strftime("%Y-%m-%d %H:%M:%S"), size=12),
-                            ],
-                        ),
-                    ],
-                ),
-            )
-
-        def history_table():
-            rows = []
-            for x in history_list:
-                rows.append(
-                    ft.DataRow(
-                        cells=[
-                            ft.DataCell(ft.Text(x["ts"].strftime("%Y-%m-%d %H:%M:%S"), color=C("TEXT"))),
-                            ft.DataCell(ft.Text(x["user"], color=C("TEXT"))),
-                            ft.DataCell(ft.Text(x["action"], color=C("TEXT"))),
-                            ft.DataCell(ft.Text(x["device"], color=C("TEXT"))),
-                            ft.DataCell(ft.Text(x["details"], color=C("TEXT"))),
-                        ]
-                    )
-                )
-
-            return ft.Container(
-                padding=0,
-                border_radius=16,
-                bgcolor=C("CARD"),
-                border=ft.border.all(1, C("BORDER")),
-                content=ft.DataTable(
-                    columns=[
-                        ft.DataColumn(ft.Text("Время", color=C("TEXT"))),
-                        ft.DataColumn(ft.Text("Пользователь", color=C("TEXT"))),
-                        ft.DataColumn(ft.Text("Действие", color=C("TEXT"))),
-                        ft.DataColumn(ft.Text("Устройство", color=C("TEXT"))),
-                        ft.DataColumn(ft.Text("Детали", color=C("TEXT"))),
-                    ],
-                    rows=rows,
-                    heading_row_color=C("FIELD"),
-                    data_row_min_height=44,
-                    data_row_max_height=64,
-                ),
-            )
-
-        list_or_table = (
-            ft.Column(spacing=12, controls=[history_item(x) for x in history_list])
-            if state["history_mode"] == "list"
-            else history_table()
-        )
-
-        content.content = ft.Column(
-            expand=True,
-            scroll=ft.ScrollMode.AUTO,
-            spacing=14,
-            controls=[
-                T("История изменений", size=22, weight=ft.FontWeight.BOLD),
-                TM("Аудит всех действий в системе"),
-                search,
-                ft.Row(
-                    spacing=12,
-                    controls=[
-                        dd_actions,
-                        ft.OutlinedButton("Экспорт", icon=ft.Icons.DOWNLOAD, on_click=lambda e: toast(page, "Экспорт (макет)")),
-                    ],
-                ),
-                ft.Row(spacing=12, controls=[btn_list, btn_table]),
-                stats,
-                list_or_table,
-                ft.Container(height=10),
-            ],
-        )
-        page.update()
-
-    def settings_view():
-        set_appbar_home()
-
-        def toggle_dark(e):
-            state["dark"] = e.control.value
-            build_root()
-
-        def sw(title, subtitle, key):
-            def _handler(e):
-                state[key] = e.control.value
-                page.update()
-
-            value = state[key]
-            on_change = toggle_dark if key == "dark" else _handler
-
-            return ft.Container(
-                padding=16,
-                border_radius=16,
-                bgcolor=C("CARD"),
-                border=ft.border.all(1, C("BORDER")),
-                content=ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(
                             spacing=2,
                             controls=[
-                                T(title, weight=ft.FontWeight.BOLD),
-                                TM(subtitle, size=12),
+                                T(str(device.get("name", "Устройство")), weight=ft.FontWeight.BOLD),
+                                TM(find_room_name(device.get("roomId")), size=12),
                             ],
                         ),
-                        ft.Switch(value=value, on_change=on_change),
+                        dd,
                     ],
-                ),
+                )
             )
 
-        profile = ft.Container(
-            padding=16,
-            border_radius=16,
-            bgcolor=C("CARD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=ft.Row(
-                spacing=12,
-                controls=[
-                    ft.Container(
-                        width=46,
-                        height=46,
-                        border_radius=999,
-                        bgcolor=C("FIELD"),
-                        alignment=ft.Alignment(0, 0),
-                        content=ft.Icon(ft.Icons.PERSON, color=_c("#2563eb")),
-                    ),
-                    ft.Column(
-                        spacing=2,
+        def save(_):
+            actions = []
+            order = 1
+            for device, dd in device_controls:
+                if dd.value == "skip":
+                    continue
+                actions.append(
+                    {
+                        "deviceId": int(device.get("id", 0)),
+                        "targetIsOn": dd.value == "on",
+                        "sortOrder": order,
+                    }
+                )
+                order += 1
+            try:
+                payload = {
+                    "name": (name_tf.value or "").strip(),
+                    "description": (description_tf.value or "").strip(),
+                    "actions": actions,
+                }
+                if editing:
+                    api_request("put", f"/api/scenes/{scene['id']}", payload)
+                    message = "Сценарий обновлен"
+                else:
+                    api_request("post", "/api/scenes", payload)
+                    message = "Сценарий создан"
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                show_message(message)
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Изменить сценарий" if editing else "Создать сценарий", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                width=760,
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[
+                        name_tf,
+                        description_tf,
+                        T("Действия сценария", weight=ft.FontWeight.BOLD),
+                        ft.Container(
+                            height=320,
+                            content=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=8, controls=action_rows),
+                        ),
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Сохранить", on_click=save),
+            ],
+        )
+        show_dialog(dialog)
+
+    def run_scene(scene_id: int, scene_name: str):
+        try:
+            api_request("post", f"/api/scenes/{scene_id}/run")
+            refresh_all()
+            build()
+            show_message(f"Сценарий запущен: {scene_name}")
+        except Exception as ex:
+            show_message(str(ex))
+
+    def delete_scene(scene_id: int, scene_name: str):
+        def action():
+            try:
+                api_request("delete", f"/api/scenes/{scene_id}")
+                refresh_all()
+                build()
+                show_message(f"Сценарий удален: {scene_name}")
+            except Exception as ex:
+                show_message(str(ex))
+
+        confirm_action("Удалить сценарий", f"Удалить сценарий «{scene_name}»?", action)
+
+    def home_view() -> ft.Control:
+        recent_logs = data["logs"][:6]
+        log_controls = [
+            card(
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        T(str(log.get("message", "Событие")), weight=ft.FontWeight.BOLD),
+                        TM(fmt_dt(log.get("ts")), size=12),
+                    ],
+                ),
+                TM(f"Источник: {log.get('source', 'api')} · Тип: {log.get('eventType', 'EVENT')}", size=12),
+            )
+            for log in recent_logs
+        ]
+        if not log_controls:
+            log_controls = [card(TM("История пока пустая"))]
+
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=18,
+            controls=[
+                ft.Container(
+                    padding=18,
+                    border_radius=18,
+                    gradient=ft.LinearGradient(colors=["#2563eb", "#9333ea"]),
+                    content=ft.Column(
+                        spacing=8,
                         controls=[
-                            T("user", weight=ft.FontWeight.BOLD),
-                            TM(USER_EMAIL),
+                            T("CALHouse", size=26, weight=ft.FontWeight.BOLD, color="#ffffff"),
+                            ft.Text(
+                                "Комнаты, привязка устройств и ручные сценарии теперь работают через backend и локальную SQLite БД.",
+                                color="#e0e7ff",
+                            ),
+                            ft.Row(
+                                spacing=10,
+                                controls=[
+                                    ft.ElevatedButton(
+                                        "Открыть комнаты",
+                                        icon=ft.Icons.MEETING_ROOM,
+                                        on_click=lambda e: switch_tab(2),
+                                    ),
+                                    ft.OutlinedButton(
+                                        "Открыть сценарии",
+                                        icon=ft.Icons.AUTO_AWESOME,
+                                        on_click=lambda e: switch_tab(3),
+                                    ),
+                                ],
+                            ),
                         ],
                     ),
-                    ft.Container(expand=True),
-                    badge2(USER_ROLE),
-                ],
-            ),
+                ),
+                ft.Row(
+                    spacing=12,
+                    controls=[
+                        stat_card("Устройства", str(len(data["devices"])), ft.Icons.DEVICES_OTHER, 1),
+                        stat_card("Комнаты", str(len(data["rooms"])), ft.Icons.MEETING_ROOM, 2),
+                        stat_card("Сценарии", str(len(data["scenes"])), ft.Icons.AUTO_AWESOME, 3),
+                    ],
+                ),
+                T("Последние события", size=18, weight=ft.FontWeight.BOLD),
+                *log_controls,
+            ],
         )
 
-        sec_block = ft.Container(
-            padding=16,
-            border_radius=16,
-            bgcolor=C("CARD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=ft.Column(
-                spacing=10,
-                controls=[
-                    T("Безопасность", weight=ft.FontWeight.BOLD),
-                    ft.OutlinedButton("Изменить пароль", icon=ft.Icons.LOCK_OUTLINE, on_click=lambda e: toast(page, "Пока макет")),
-                    ft.OutlinedButton("Двухфакторная аутентификация", icon=ft.Icons.PHONE_ANDROID, on_click=lambda e: toast(page, "Пока макет")),
-                    ft.OutlinedButton("Активные сессии", icon=ft.Icons.PUBLIC, on_click=lambda e: toast(page, "Пока макет")),
-                ],
-            ),
-        )
-
-        data_block = ft.Container(
-            padding=16,
-            border_radius=16,
-            bgcolor=C("CARD"),
-            border=ft.border.all(1, C("BORDER")),
-            content=ft.Column(
-                spacing=10,
-                controls=[
-                    T("Данные и конфиденциальность", weight=ft.FontWeight.BOLD),
-                    ft.OutlinedButton("Экспортировать данные", icon=ft.Icons.MAIL_OUTLINE, on_click=lambda e: toast(page, "Экспорт (макет)")),
-                    ft.Container(
-                        padding=14,
-                        border_radius=12,
-                        bgcolor=_c("#fef9c3"),
-                        content=ft.Row(
+    def devices_view() -> ft.Control:
+        device_cards = []
+        for device in data["devices"]:
+            room_dd = dropdown(
+                value=str(device.get("roomId")) if device.get("roomId") is not None else None,
+                options=room_options(),
+                width=220,
+            )
+            device_cards.append(
+                card(
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Column(
+                                spacing=4,
+                                controls=[
+                                    T(str(device.get("name", "Устройство")), size=18, weight=ft.FontWeight.BOLD),
+                                    TM(f"Комната: {device.get('room', 'Комната не указана')}", size=12),
+                                    TM(f"Тип: {device.get('type', 'Другое')} · Provider: {device.get('provider', 'mock')}", size=12),
+                                ],
+                            ),
+                            ft.Container(
+                                padding=ft.padding.symmetric(horizontal=12, vertical=6),
+                                border_radius=999,
+                                bgcolor="#dcfce7" if device.get("isOn") else "#e2e8f0",
+                                content=ft.Text(
+                                    "Включено" if device.get("isOn") else "Выключено",
+                                    color="#166534" if device.get("isOn") else "#475569",
+                                    weight=ft.FontWeight.W_600,
+                                ),
+                            ),
+                        ],
+                    ),
+                    TM(f"Обновлено: {fmt_dt(device.get('updatedAt'))}"),
+                    ft.Row(
+                        spacing=10,
+                        controls=[
+                            ft.ElevatedButton(
+                                "Toggle",
+                                icon=ft.Icons.POWER_SETTINGS_NEW,
+                                on_click=lambda e, device_id=device["id"]: toggle_device(device_id),
+                            ),
+                            ft.OutlinedButton(
+                                "Удалить",
+                                icon=ft.Icons.DELETE_OUTLINE,
+                                on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство"))),
+                            ),
+                        ],
+                    ),
+                    ft.Row(
+                        spacing=10,
+                        controls=[
+                            room_dd,
+                            ft.OutlinedButton(
+                                "Переместить",
+                                icon=ft.Icons.SWAP_HORIZ,
+                                on_click=lambda e, device_id=device["id"], dd=room_dd: move_device(int(device_id), dd.value),
+                            ),
+                        ],
+                    ),
+                )
+            )
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(spacing=4, controls=[T("Устройства", size=22, weight=ft.FontWeight.BOLD), TM("CRUD устройств и изменение привязки к комнатам")]),
+                        ft.Row(
                             spacing=10,
                             controls=[
-                                ft.Icon(ft.Icons.INFO_OUTLINE, color=_c("#b45309")),
-                                ft.Text("Важно: бойтесь мошенников.", color=_c("#7c2d12")),
+                                ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()),
+                                ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
                             ],
                         ),
-                    ),
-                ],
-            ),
+                    ],
+                ),
+                *(device_cards or [card(TM("Устройств пока нет"))]),
+            ],
         )
 
-        content.content = ft.Column(
-            expand=True,
+    def rooms_view() -> ft.Control:
+        room_cards = []
+        devices_by_room: dict[int, list[dict[str, Any]]] = {}
+        for device in data["devices"]:
+            room_id = device.get("roomId")
+            if room_id is None:
+                continue
+            devices_by_room.setdefault(int(room_id), []).append(device)
+
+        for room in data["rooms"]:
+            room_devices = devices_by_room.get(int(room["id"]), [])
+            device_lines = room_devices or []
+            room_cards.append(
+                card(
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Column(
+                                spacing=4,
+                                controls=[
+                                    T(str(room.get("name", "Комната")), size=18, weight=ft.FontWeight.BOLD),
+                                    TM(f"Зона: {room.get('zone', '') or 'Не указана'}", size=12),
+                                    TM(f"Устройств: {room.get('deviceCount', 0)}", size=12),
+                                ],
+                            ),
+                            ft.Row(
+                                spacing=8,
+                                controls=[
+                                    ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, r=room: open_room_dialog(r)),
+                                    ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, r=room: delete_room(int(r["id"]), str(r.get("name", "Комната")))),
+                                ],
+                            ),
+                        ],
+                    ),
+                    T("Устройства в комнате", weight=ft.FontWeight.BOLD),
+                    *([
+                        ft.Container(
+                            padding=10,
+                            border_radius=12,
+                            bgcolor=c("field"),
+                            content=ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                controls=[
+                                    ft.Column(
+                                        spacing=2,
+                                        controls=[
+                                            T(str(device.get("name", "Устройство")), weight=ft.FontWeight.BOLD),
+                                            TM(f"Тип: {device.get('type', 'Другое')}", size=12),
+                                        ],
+                                    ),
+                                    TM("Вкл" if device.get("isOn") else "Выкл", size=12),
+                                ],
+                            ),
+                        ) for device in device_lines
+                    ] if device_lines else [TM("В этой комнате пока нет устройств")]),
+                )
+            )
+
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(spacing=4, controls=[T("Комнаты и зоны", size=22, weight=ft.FontWeight.BOLD), TM("CRUD комнат, зоны и группировка устройств")]),
+                        ft.Row(
+                            spacing=10,
+                            controls=[
+                                ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog()),
+                                ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
+                            ],
+                        ),
+                    ],
+                ),
+                *(room_cards or [card(TM("Комнат пока нет"))]),
+            ],
+        )
+
+    def scenes_view() -> ft.Control:
+        scene_cards = []
+        for scene in data["scenes"]:
+            action_lines = scene.get("actions", []) or []
+            scene_cards.append(
+                card(
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Column(
+                                spacing=4,
+                                controls=[
+                                    T(str(scene.get("name", "Сценарий")), size=18, weight=ft.FontWeight.BOLD),
+                                    TM(str(scene.get("description", "")) or "Без описания", size=12),
+                                ],
+                            ),
+                            ft.Row(
+                                spacing=8,
+                                controls=[
+                                    ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, s=scene: open_scene_dialog(s)),
+                                    ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, s=scene: delete_scene(int(s["id"]), str(s.get("name", "Сценарий")))),
+                                ],
+                            ),
+                        ],
+                    ),
+                    T("Действия", weight=ft.FontWeight.BOLD),
+                    *([
+                        ft.Container(
+                            padding=10,
+                            border_radius=12,
+                            bgcolor=c("field"),
+                            content=ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                controls=[
+                                    ft.Column(
+                                        spacing=2,
+                                        controls=[
+                                            T(str(action.get("deviceName", "Устройство")), weight=ft.FontWeight.BOLD),
+                                            TM(str(action.get("roomName", "Комната не указана")), size=12),
+                                        ],
+                                    ),
+                                    TM("Включить" if action.get("targetIsOn") else "Выключить", size=12),
+                                ],
+                            ),
+                        ) for action in action_lines
+                    ] if action_lines else [TM("В сценарии пока нет действий")]),
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Column(
+                                spacing=2,
+                                controls=[
+                                    TM(f"Последний запуск: {fmt_dt(scene.get('lastRunAt'))}", size=12),
+                                    TM(f"Статус: {scene.get('lastRunStatus') or 'не запускался'}", size=12),
+                                    TM(scene.get("lastRunMessage") or "", size=12),
+                                ],
+                            ),
+                            ft.ElevatedButton(
+                                "Запустить",
+                                icon=ft.Icons.PLAY_ARROW,
+                                on_click=lambda e, s=scene: run_scene(int(s["id"]), str(s.get("name", "Сценарий"))),
+                            ),
+                        ],
+                    ),
+                )
+            )
+
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(spacing=4, controls=[T("Сценарии", size=22, weight=ft.FontWeight.BOLD), TM("Создание, изменение, удаление и ручной запуск сцен")]),
+                        ft.Row(
+                            spacing=10,
+                            controls=[
+                                ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog()),
+                                ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
+                            ],
+                        ),
+                    ],
+                ),
+                *(scene_cards or [card(TM("Сценариев пока нет"))]),
+            ],
+        )
+
+    def history_view() -> ft.Control:
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(spacing=4, controls=[T("История и логирование", size=22, weight=ft.FontWeight.BOLD), TM("Логи backend и результаты выполнения сцен")]),
+                        ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
+                    ],
+                ),
+                *([
+                    card(
+                        ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                T(str(log.get("message", "Событие")), weight=ft.FontWeight.BOLD),
+                                TM(fmt_dt(log.get("ts")), size=12),
+                            ],
+                        ),
+                        TM(f"Тип: {log.get('eventType', 'EVENT')} · Источник: {log.get('source', 'api')}", size=12),
+                        TM(f"severity={log.get('severity', 'info')} · deviceId={log.get('deviceId')} · sceneId={log.get('sceneId')}", size=12),
+                    ) for log in data["logs"]
+                ] or [card(TM("Логи пока пустые"))]),
+            ],
+        )
+
+    def settings_view() -> ft.Control:
+        dark_sw = ft.Switch(label="Темная тема", value=state["dark"])
+
+        def save_settings(_):
+            state["dark"] = bool(dark_sw.value)
+            page.theme_mode = ft.ThemeMode.DARK if state["dark"] else ft.ThemeMode.LIGHT
+            build()
+            show_message("Настройки обновлены")
+
+        return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
             controls=[
                 T("Настройки", size=22, weight=ft.FontWeight.BOLD),
-                TM("Управление параметрами системы"),
-                profile,
-                T("Внешний вид", size=16, weight=ft.FontWeight.BOLD),
-                sw("Темная тема", "Изменить цветовую схему интерфейса", "dark"),
-                T("Уведомления", size=16, weight=ft.FontWeight.BOLD),
-                sw("Push-уведомления", "Получать уведомления на устройстве", "notif_push"),
-                sw("Email уведомления", "Получать уведомления на почту", "notif_email"),
-                sw("Звуковые уведомления", "Воспроизводить звук при уведомлениях", "notif_sound"),
-                sw("Уведомления безопасности", "Критические события безопасности", "notif_security"),
-                sw("Отчеты об энергии", "Еженедельные отчеты о потреблении", "energy_reports"),
-                T("Безопасность", size=16, weight=ft.FontWeight.BOLD),
-                sec_block,
-                data_block,
-                ft.ElevatedButton(
-                    "Выйти из системы",
-                    icon=ft.Icons.LOGOUT,
-                    bgcolor=_c("#dc2626"),
-                    color=_c("#ffffff"),
-                    height=44,
-                    on_click=lambda e: do_logout(),
+                card(
+                    T("Интерфейс", weight=ft.FontWeight.BOLD),
+                    dark_sw,
+                    ft.ElevatedButton("Сохранить", on_click=save_settings),
                 ),
-                ft.OutlinedButton(
-                    "Удалить аккаунт",
-                    icon=ft.Icons.DELETE_FOREVER,
-                    on_click=lambda e: toast(page, "Удаление (макет)"),
+                card(
+                    T("Подключение к API", weight=ft.FontWeight.BOLD),
+                    TM(f"Base URL: {API_BASE}"),
+                    TM("Backend должен быть запущен на ASP.NET Core приложении из backend/CalHouse.Api"),
                 ),
-                ft.Container(height=6),
-                TM("SmartHome v1.0.0", text_align=ft.TextAlign.CENTER),
-                TM("© 2026 Все права защищены", text_align=ft.TextAlign.CENTER),
-                ft.Container(height=10),
             ],
         )
-        page.update()
 
     nav = ft.NavigationBar(
         selected_index=0,
-        bgcolor=C("NAV"),
+        bgcolor=c("nav"),
         destinations=[
             ft.NavigationBarDestination(icon=ft.Icons.HOME_OUTLINED, selected_icon=ft.Icons.HOME, label="Главная"),
             ft.NavigationBarDestination(icon=ft.Icons.FLASH_ON_OUTLINED, selected_icon=ft.Icons.FLASH_ON, label="Устройства"),
-            ft.NavigationBarDestination(icon=ft.Icons.MEETING_ROOM_OUTLINED, selected_icon=ft.Icons.MEETING_ROOM, label="Комнаты"),
-            ft.NavigationBarDestination(icon=ft.Icons.AUTO_MODE_OUTLINED, selected_icon=ft.Icons.AUTO_MODE, label="Сцены"),
+            ft.NavigationBarDestination(icon=ft.Icons.MEETING_ROOM, selected_icon=ft.Icons.MEETING_ROOM, label="Комнаты"),
+            ft.NavigationBarDestination(icon=ft.Icons.AUTO_AWESOME, selected_icon=ft.Icons.AUTO_AWESOME, label="Сценарии"),
             ft.NavigationBarDestination(icon=ft.Icons.HISTORY_OUTLINED, selected_icon=ft.Icons.HISTORY, label="История"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Настройки"),
         ],
@@ -2046,48 +853,35 @@ def main(page: ft.Page):
 
     def on_nav_change(e: ft.ControlEvent):
         state["tab"] = int(e.control.selected_index)
-        build_root()
+        build()
 
     nav.on_change = on_nav_change
 
-    def do_logout():
-        state["logged_in"] = False
-        state["tab"] = 0
-        state["show_add_form"] = False
-        build_root()
-
-    def build_root():
-        page.controls.clear()
-
-        if not state["logged_in"]:
-            page.appbar = None
-            page.navigation_bar = None
-            page.bgcolor = _c("#eaf1ff")
-            page.add(login_view)
-            page.update()
-            return
-
-        page.bgcolor = C("BG")
+    def build():
+        page.bgcolor = c("bg")
         page.navigation_bar = nav
         nav.selected_index = state["tab"]
+        page.appbar = ft.AppBar(
+            bgcolor=c("nav"),
+            title=ft.Text("CALHouse", color=c("text"), weight=ft.FontWeight.BOLD),
+            actions=[ft.IconButton(ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()), icon_color=c("text"))],
+        )
 
-        if state["tab"] == 0:
-            home_view()
-        elif state["tab"] == 1:
-            devices_view()
-        elif state["tab"] == 2:
-            rooms_view()
-        elif state["tab"] == 3:
-            scenes_view()
-        elif state["tab"] == 4:
-            history_view()
-        elif state["tab"] == 5:
-            settings_view()
-
+        views = {
+            0: home_view,
+            1: devices_view,
+            2: rooms_view,
+            3: scenes_view,
+            4: history_view,
+            5: settings_view,
+        }
+        content.content = views.get(state["tab"], home_view)()
+        page.controls.clear()
         page.add(content)
         page.update()
 
-    build_root()
+    refresh_all()
+    build()
 
 
 ft.run(main)
