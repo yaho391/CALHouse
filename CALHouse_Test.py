@@ -34,6 +34,10 @@ def main(page: ft.Page):
         "devices": [],
         "rooms": [],
         "scenes": [],
+        "rules": [],
+        "rule_triggers": [],
+        "schedules": [],
+        "schedule_runs": [],
         "logs": [],
     }
 
@@ -167,10 +171,28 @@ def main(page: ft.Page):
             if show_error:
                 show_message(str(ex))
 
+    def load_rules(show_error: bool = False):
+        try:
+            data["rules"] = api_request("get", "/api/rules") or []
+            data["rule_triggers"] = api_request("get", "/api/rules/triggers?limit=30") or []
+        except Exception as ex:
+            if show_error:
+                show_message(str(ex))
+
+    def load_schedules(show_error: bool = False):
+        try:
+            data["schedules"] = api_request("get", "/api/schedules") or []
+            data["schedule_runs"] = api_request("get", "/api/schedules/runs?limit=30") or []
+        except Exception as ex:
+            if show_error:
+                show_message(str(ex))
+
     def refresh_all(show_toast: bool = False):
         load_rooms(show_error=True)
         load_devices(show_error=True)
         load_scenes(show_error=True)
+        load_rules(show_error=True)
+        load_schedules(show_error=True)
         load_logs(show_error=True)
         if show_toast:
             show_message("Данные обновлены")
@@ -229,7 +251,14 @@ def main(page: ft.Page):
 
     def open_device_dialog():
         name_tf = field(label="Название", hint_text="Например: Лампа IKEA")
+        identifier_tf = field(label="Идентификатор", hint_text="Например: zigbee-lamp-01")
         room_tf = field(label="Комната", hint_text="Например: Спальня")
+        provider_dd = dropdown(
+            label="Провайдер",
+            value="mock",
+            options=[ft.dropdown.Option("mock"), ft.dropdown.Option("http"), ft.dropdown.Option("tcp"), ft.dropdown.Option("mqtt")],
+        )
+        endpoint_tf = field(label="Endpoint/URL", hint_text="Для http: url, для tcp/mqtt: host:port")
         type_dd = dropdown(
             label="Тип устройства",
             value=DEVICE_TYPES[0],
@@ -239,26 +268,37 @@ def main(page: ft.Page):
 
         def save(_):
             try:
+                connection: dict[str, Any] = {}
+                endpoint = (endpoint_tf.value or "").strip()
+                if provider_dd.value == "http" and endpoint:
+                    connection["url"] = endpoint
+                elif provider_dd.value in ("tcp", "mqtt") and endpoint:
+                    if ":" in endpoint:
+                        host, port = endpoint.split(":", 1)
+                        connection["host"] = host.strip()
+                        connection["port"] = port.strip()
+                validate = api_request("post", "/api/devices/validate-connection", {"provider": provider_dd.value, "connection": connection})
                 payload = {
                     "name": (name_tf.value or "").strip(),
+                    "identifier": (identifier_tf.value or "").strip() or None,
                     "room": (room_tf.value or "").strip(),
                     "isOn": bool(is_on_sw.value),
                     "type": type_dd.value or "Другое",
-                    "provider": "mock",
-                    "connection": {},
+                    "provider": provider_dd.value or "mock",
+                    "connection": connection,
                 }
                 api_request("post", "/api/devices", payload)
                 close_dialog(dialog)
                 refresh_all()
                 build()
-                show_message("Устройство добавлено")
+                show_message(f"Устройство добавлено ({'подключено' if validate and validate.get('ok') else 'нет связи'})")
             except Exception as ex:
                 show_message(str(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
             title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
-            content=ft.Column(tight=True, spacing=10, controls=[name_tf, room_tf, type_dd, is_on_sw]),
+            content=ft.Column(tight=True, spacing=10, controls=[name_tf, identifier_tf, room_tf, provider_dd, endpoint_tf, type_dd, is_on_sw]),
             actions=[
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
                 ft.ElevatedButton("Сохранить", on_click=save),
@@ -552,6 +592,7 @@ def main(page: ft.Page):
                                     T(str(device.get("name", "Устройство")), size=18, weight=ft.FontWeight.BOLD),
                                     TM(f"Комната: {device.get('room', 'Комната не указана')}", size=12),
                                     TM(f"Тип: {device.get('type', 'Другое')} · Provider: {device.get('provider', 'mock')}", size=12),
+                                    TM(f"ID: {device.get('identifier') or '—'} · Связь: {device.get('connectionStatus', 'unknown')}", size=12),
                                 ],
                             ),
                             ft.Container(
@@ -783,6 +824,154 @@ def main(page: ft.Page):
             ],
         )
 
+    def open_rule_dialog():
+        name_tf = field(label="Название правила", hint_text="Например: Движение в коридоре")
+        source_dd = dropdown(label="Источник события", options=[ft.dropdown.Option(str(d["id"]), f'{d["name"]} (#{d["id"]})') for d in data["devices"]])
+        event_tf = field(label="Тип события", value="state")
+        op_dd = dropdown(label="Оператор", value="eq", options=[ft.dropdown.Option("eq"), ft.dropdown.Option("neq"), ft.dropdown.Option("gt"), ft.dropdown.Option("gte"), ft.dropdown.Option("lt"), ft.dropdown.Option("lte"), ft.dropdown.Option("contains")])
+        value_tf = field(label="Значение для сравнения", hint_text="Например: motion или 27")
+        action_dd = dropdown(label="Действие", value="scene", options=[ft.dropdown.Option("scene"), ft.dropdown.Option("device")])
+        scene_dd = dropdown(label="Сценарий", options=[ft.dropdown.Option(str(s["id"]), s["name"]) for s in data["scenes"]])
+        target_device_dd = dropdown(label="Устройство", options=[ft.dropdown.Option(str(d["id"]), d["name"]) for d in data["devices"]])
+        target_state_sw = ft.Switch(label="Целевое состояние ON", value=True)
+
+        def save(_):
+            try:
+                payload = {
+                    "name": (name_tf.value or "").strip(),
+                    "isEnabled": True,
+                    "sourceDeviceId": int(source_dd.value),
+                    "eventType": (event_tf.value or "state").strip(),
+                    "operator": op_dd.value or "eq",
+                    "compareValue": (value_tf.value or "").strip(),
+                    "actionType": action_dd.value or "scene",
+                    "actionSceneId": int(scene_dd.value) if (action_dd.value == "scene" and scene_dd.value) else None,
+                    "actionDeviceId": int(target_device_dd.value) if (action_dd.value == "device" and target_device_dd.value) else None,
+                    "actionTargetIsOn": bool(target_state_sw.value) if action_dd.value == "device" else None,
+                }
+                api_request("post", "/api/rules", payload)
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                show_message("Правило создано")
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Создать правило", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=760, content=ft.Column(tight=True, spacing=10, controls=[name_tf, source_dd, event_tf, op_dd, value_tf, action_dd, scene_dd, target_device_dd, target_state_sw])),
+            actions=[ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)), ft.ElevatedButton("Сохранить", on_click=save)],
+        )
+        show_dialog(dialog)
+
+    def rules_view() -> ft.Control:
+        def send_event(device_id: int):
+            event_tf = field(label="Тип события", value="state")
+            value_tf = field(label="Значение", value="motion")
+
+            def run_event(_):
+                try:
+                    api_request("post", "/api/rules/process-event", {"deviceId": device_id, "eventType": event_tf.value, "value": value_tf.value})
+                    close_dialog(dialog)
+                    refresh_all()
+                    build()
+                    show_message("Событие обработано")
+                except Exception as ex:
+                    show_message(str(ex))
+
+            dialog = ft.AlertDialog(
+                modal=True,
+                title=T("Тест события датчика", weight=ft.FontWeight.BOLD),
+                content=ft.Column(tight=True, spacing=10, controls=[event_tf, value_tf]),
+                actions=[ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)), ft.ElevatedButton("Отправить", on_click=run_event)],
+            )
+            show_dialog(dialog)
+
+        cards = []
+        for rule in data["rules"]:
+            cards.append(card(
+                T(str(rule.get("name", "Правило")), size=18, weight=ft.FontWeight.BOLD),
+                TM(f"Если {rule.get('eventType')} {rule.get('operator')} {rule.get('compareValue')} (device #{rule.get('sourceDeviceId')})"),
+                TM(f"Действие: {rule.get('actionType')} · срабатываний: {rule.get('triggerCount', 0)}"),
+                ft.Row(spacing=8, controls=[
+                    ft.OutlinedButton("Тест события", on_click=lambda e, d=rule.get("sourceDeviceId"): send_event(int(d))),
+                    ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, rid=rule.get("id"): (api_request("delete", f"/api/rules/{int(rid)}"), refresh_all(), build())),
+                ])
+            ))
+        trigger_cards = [card(T(str(t.get("ruleName", "Триггер")), weight=ft.FontWeight.BOLD), TM(f"{fmt_dt(t.get('triggeredAt'))} · {t.get('message')}")) for t in data["rule_triggers"][:10]]
+        return ft.Column(scroll=ft.ScrollMode.AUTO, spacing=14, controls=[
+            ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                ft.Column(spacing=4, controls=[T("Автоматизация по событиям", size=22, weight=ft.FontWeight.BOLD), TM("Правила вида if-event-then-action")]),
+                ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+            ]),
+            *(cards or [card(TM("Правил пока нет"))]),
+            T("Последние срабатывания", size=18, weight=ft.FontWeight.BOLD),
+            *(trigger_cards or [card(TM("Срабатываний пока нет"))]),
+        ])
+
+    def open_schedule_dialog():
+        name_tf = field(label="Название расписания", hint_text="Например: Утренний запуск")
+        days_tf = field(label="Дни недели", value="1,2,3,4,5,6,7", hint_text="1=Пн ... 7=Вс")
+        time_tf = field(label="Время HH:mm", value="08:00")
+        action_dd = dropdown(label="Действие", value="scene", options=[ft.dropdown.Option("scene"), ft.dropdown.Option("device")])
+        scene_dd = dropdown(label="Сценарий", options=[ft.dropdown.Option(str(s["id"]), s["name"]) for s in data["scenes"]])
+        device_dd = dropdown(label="Устройство", options=[ft.dropdown.Option(str(d["id"]), d["name"]) for d in data["devices"]])
+        target_sw = ft.Switch(label="Целевое состояние ON", value=True)
+
+        def save(_):
+            try:
+                payload = {
+                    "name": (name_tf.value or "").strip(),
+                    "isEnabled": True,
+                    "daysOfWeek": (days_tf.value or "").strip(),
+                    "timeOfDay": (time_tf.value or "").strip(),
+                    "actionType": action_dd.value or "scene",
+                    "actionSceneId": int(scene_dd.value) if action_dd.value == "scene" and scene_dd.value else None,
+                    "actionDeviceId": int(device_dd.value) if action_dd.value == "device" and device_dd.value else None,
+                    "actionTargetIsOn": bool(target_sw.value) if action_dd.value == "device" else None,
+                }
+                api_request("post", "/api/schedules", payload)
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                show_message("Расписание создано")
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Создать расписание", weight=ft.FontWeight.BOLD),
+            content=ft.Container(width=760, content=ft.Column(tight=True, spacing=10, controls=[name_tf, days_tf, time_tf, action_dd, scene_dd, device_dd, target_sw])),
+            actions=[ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)), ft.ElevatedButton("Сохранить", on_click=save)],
+        )
+        show_dialog(dialog)
+
+    def schedules_view() -> ft.Control:
+        cards = []
+        for schedule in data["schedules"]:
+            cards.append(card(
+                T(str(schedule.get("name", "Расписание")), size=18, weight=ft.FontWeight.BOLD),
+                TM(f"Дни: {schedule.get('daysOfWeek')} · Время: {schedule.get('timeOfDay')}"),
+                TM(f"Действие: {schedule.get('actionType')} · Последний запуск: {fmt_dt(schedule.get('lastRunAt'))}"),
+                ft.Row(spacing=8, controls=[
+                    ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, sid=schedule.get("id"): (api_request("delete", f"/api/schedules/{int(sid)}"), refresh_all(), build())),
+                ])
+            ))
+        run_cards = [card(T(str(r.get("scheduleName", "Запуск")), weight=ft.FontWeight.BOLD), TM(f"{fmt_dt(r.get('startedAt'))} · {r.get('message')}")) for r in data["schedule_runs"][:10]]
+        return ft.Column(scroll=ft.ScrollMode.AUTO, spacing=14, controls=[
+            ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
+                ft.Column(spacing=4, controls=[T("Расписание", size=22, weight=ft.FontWeight.BOLD), TM("Запуск действий по времени и дням недели")]),
+                ft.Row(spacing=10, controls=[
+                    ft.ElevatedButton("Создать расписание", icon=ft.Icons.SCHEDULE, on_click=lambda e: open_schedule_dialog()),
+                    ft.OutlinedButton("Запустить планировщик", on_click=lambda e: (api_request("post", "/api/schedules/run-due", {}), refresh_all(True), build())),
+                ]),
+            ]),
+            *(cards or [card(TM("Расписаний пока нет"))]),
+            T("История запусков", size=18, weight=ft.FontWeight.BOLD),
+            *(run_cards or [card(TM("История запусков пока пустая"))]),
+        ])
+
     def history_view() -> ft.Control:
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
@@ -846,6 +1035,8 @@ def main(page: ft.Page):
             ft.NavigationBarDestination(icon=ft.Icons.FLASH_ON_OUTLINED, selected_icon=ft.Icons.FLASH_ON, label="Устройства"),
             ft.NavigationBarDestination(icon=ft.Icons.MEETING_ROOM, selected_icon=ft.Icons.MEETING_ROOM, label="Комнаты"),
             ft.NavigationBarDestination(icon=ft.Icons.AUTO_AWESOME, selected_icon=ft.Icons.AUTO_AWESOME, label="Сценарии"),
+            ft.NavigationBarDestination(icon=ft.Icons.SENSORS, selected_icon=ft.Icons.SENSORS, label="Правила"),
+            ft.NavigationBarDestination(icon=ft.Icons.SCHEDULE, selected_icon=ft.Icons.SCHEDULE, label="Расписание"),
             ft.NavigationBarDestination(icon=ft.Icons.HISTORY_OUTLINED, selected_icon=ft.Icons.HISTORY, label="История"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Настройки"),
         ],
@@ -872,8 +1063,10 @@ def main(page: ft.Page):
             1: devices_view,
             2: rooms_view,
             3: scenes_view,
-            4: history_view,
-            5: settings_view,
+            4: rules_view,
+            5: schedules_view,
+            6: history_view,
+            7: settings_view,
         }
         content.content = views.get(state["tab"], home_view)()
         page.controls.clear()
