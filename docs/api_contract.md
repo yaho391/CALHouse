@@ -1,19 +1,78 @@
 # CALHouse / Система управления умным домом
 
-В проекте теперь есть полноценная связка:
+Проект состоит из двух основных частей:
 
 - **backend**: `backend/CalHouse.Api` — ASP.NET Core Minimal API (`net8.0`)
-- **frontend**: `CALHouse_Test.py` — рабочий интерфейс на **Flet 0.80.5**
-- **хранилище**: локальная **SQLite** БД `backend/CalHouse.Api/App_Data/calhouse.db`
-- **совместимость**: файл `backend/CalHouse.Api/App_Data/devices.json` сохраняется и автоматически синхронизируется как legacy-слой
+- **frontend**: `CALHouse_Test.py` — интерфейс на **Flet 0.80.5**
 
-Также в архив добавлена папка `legacy_snapshots/` с копиями исходных ключевых файлов до расширения проекта.
+Хранилище данных:
 
----
+- **SQLite**: `backend/CalHouse.Api/App_Data/calhouse.db`
+- **legacy JSON**: `backend/CalHouse.Api/App_Data/devices.json` синхронизируется автоматически
 
-## Что реализовано
+## Что теперь реализовано
 
-### Устройства
+### 1. Подключение устройств
+Поддерживается полноценное добавление устройств с параметрами:
+
+- название
+- уникальный `externalId`
+- тип устройства
+- provider
+- протокол
+- канал
+- привязка к комнате
+- производитель / модель
+- connection-параметры
+
+При создании и обновлении устройства backend:
+
+- проверяет уникальность идентификатора
+- валидирует обязательные connection-поля
+- выполняет тест связи
+- сохраняет статус подключения: `connected` / `no_connection` / `unknown`
+
+Подготовлены provider-модели для реальных устройств и интеграций:
+
+- `Shelly`
+- `Tasmota`
+- `MQTT`
+- `Zigbee2MQTT`
+- `Home Assistant entity`
+- `IP Camera`
+- `Custom HTTP`
+- `Custom TCP`
+- `mock`
+
+### 2. Автоматизация по событиям
+Добавлены правила вида:
+
+- если событие датчика подходит под условие,
+- то выполняется действие над устройством **или** запускается сценарий
+
+Поддерживается:
+
+- хранение правил в БД
+- включение / выключение правил
+- приём событий через API
+- автоматическая проверка условий
+- журналирование срабатываний
+- история запусков правил
+
+### 3. Расписание
+Добавлено расписание по времени:
+
+- запуск по `HH:mm`
+- выбор дней недели
+- действие над устройством **или** запуск сценария
+- логирование запусков
+- история выполнения
+- фоновая проверка расписаний через hosted service
+
+## Основные эндпоины
+
+### Каталог и устройства
+- `GET /api/device-catalog`
 - `GET /api/devices`
 - `GET /api/devices/{id}`
 - `POST /api/devices`
@@ -22,8 +81,9 @@
 - `PUT /api/devices/{id}/room`
 - `DELETE /api/devices/{id}`
 - `POST /api/devices/validate-connection`
+- `POST /api/events`
 
-### Комнаты и зоны
+### Комнаты
 - `GET /api/rooms`
 - `GET /api/rooms/{id}`
 - `GET /api/rooms/{id}/devices`
@@ -31,7 +91,7 @@
 - `PUT /api/rooms/{id}`
 - `DELETE /api/rooms/{id}`
 
-### Сценарии (сцены)
+### Сценарии
 - `GET /api/scenes`
 - `GET /api/scenes/{id}`
 - `GET /api/scenes/{id}/runs`
@@ -40,39 +100,27 @@
 - `DELETE /api/scenes/{id}`
 - `POST /api/scenes/{id}/run`
 
+### Правила
+- `GET /api/rules`
+- `GET /api/rules/{id}`
+- `GET /api/rules/{id}/runs`
+- `POST /api/rules`
+- `PUT /api/rules/{id}`
+- `PUT /api/rules/{id}/enabled`
+- `DELETE /api/rules/{id}`
+
+### Расписание
+- `GET /api/schedules`
+- `GET /api/schedules/{id}`
+- `GET /api/schedules/{id}/runs`
+- `POST /api/schedules`
+- `PUT /api/schedules/{id}`
+- `PUT /api/schedules/{id}/enabled`
+- `POST /api/schedules/run-due`
+- `DELETE /api/schedules/{id}`
+
 ### Логи
-- `GET /api/logs?limit=50`
-
----
-
-## Как работает хранение данных
-
-Вместо тестового JSON-only слоя backend теперь использует локальную SQLite БД.
-
-Таблицы:
-- `Rooms`
-- `Devices`
-- `Scenes`
-- `SceneActions`
-- `SceneRuns`
-- `EventLogs`
-
-При первом запуске backend автоматически:
-1. создаёт `calhouse.db`,
-2. переносит стартовые устройства из старого `devices.json`,
-3. дальше работает уже через SQLite.
-
-После операций с устройствами legacy-файл `devices.json` автоматически обновляется, чтобы совместимость с предыдущей структурой не потерялась.
-
----
-
-## Требования
-
-- **.NET SDK 8.0+**
-- **Python 3.10+**
-- `pip`
-
----
+- `GET /api/logs?limit=80`
 
 ## Запуск backend
 
@@ -82,13 +130,6 @@ dotnet restore
 dotnet run --urls "http://localhost:5000"
 ```
 
-После запуска доступны:
-- `GET /`
-- `GET /swagger` (в Development)
-- все маршруты из `/api/...`
-
----
-
 ## Запуск frontend
 
 ```bash
@@ -96,104 +137,22 @@ pip install "flet==0.80.5" requests
 python CALHouse_Test.py
 ```
 
-Или через виртуальное окружение:
+## Вкладки в Flet UI
 
-```bash
-python -m venv .venv
-source .venv/bin/activate   # Linux/macOS
-# .venv\Scripts\activate   # Windows
-pip install "flet==0.80.5" requests
-python CALHouse_Test.py
-```
-
-В UI доступны вкладки:
 - Главная
 - Устройства
 - Комнаты
 - Сценарии
+- Правила
+- Расписание
 - История
 - Настройки
 
----
+## Что важно для демонстрации
 
-## Примеры запросов
-
-### Создать комнату
-```json
-POST /api/rooms
-{
-  "name": "Спальня",
-  "zone": "Второй этаж"
-}
-```
-
-### Создать устройство
-```json
-POST /api/devices
-{
-  "name": "Лампа у кровати",
-  "room": "Спальня",
-  "isOn": false,
-  "type": "Свет",
-  "provider": "mock",
-  "connection": {}
-}
-```
-
-### Перенести устройство в другую комнату
-```json
-PUT /api/devices/5/room
-{
-  "roomId": 2
-}
-```
-
-### Создать сцену
-```json
-POST /api/scenes
-{
-  "name": "Уйти из дома",
-  "description": "Выключить свет и включить охранные устройства",
-  "actions": [
-    { "deviceId": 1, "targetIsOn": false, "sortOrder": 1 },
-    { "deviceId": 3, "targetIsOn": true, "sortOrder": 2 }
-  ]
-}
-```
-
-### Запустить сцену
-```bash
-curl -X POST http://localhost:5000/api/scenes/1/run
-```
-
----
-
-## Поведение ошибок
-
-Backend возвращает ошибки в формате:
-
-```json
-{
-  "error": "Текст ошибки",
-  "code": "ERROR_CODE",
-  "message": "Текст ошибки"
-}
-```
-
-Примеры:
-- `ROOM_NOT_EMPTY`
-- `ROOM_NOT_FOUND`
-- `DEVICE_NOT_FOUND`
-- `SCENE_NOT_FOUND`
-- `SCENE_ACTIONS_REQUIRED`
-- `SCENE_NAME_EXISTS`
-
----
-
-## Что важно для отчёта / демонстрации
-
-1. Комнаты теперь создаются и редактируются отдельно.
-2. Устройства можно перепривязывать между комнатами.
-3. Сцены сохраняются в БД и запускаются вручную.
-4. Выполнение сцен логируется.
-5. История доступна через `GET /api/logs` и показывается в Flet UI.
+1. Добавить реальное устройство с `externalId` и тестом связи.
+2. Показать карточку устройства со статусом подключения.
+3. Создать правило и отправить событие через UI.
+4. Показать, что правило выполнило действие или запустило сценарий.
+5. Создать расписание и проверить запуск вручную через `Проверить сейчас`.
+6. Открыть историю и показать соответствующие логи.

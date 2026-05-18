@@ -1,7 +1,4 @@
 using System.Data;
-using System.Globalization;
-using System.Net.Http;
-using System.Net.Sockets;
 using System.Text.Json;
 using CalHouse.Api.Infrastructure;
 using CalHouse.Api.Models;
@@ -9,7 +6,7 @@ using Microsoft.Data.Sqlite;
 
 namespace CalHouse.Api.Services;
 
-public class DeviceStore
+public partial class DeviceStore
 {
     private readonly string _databasePath;
     private readonly string _legacyDevicesPath;
@@ -35,6 +32,7 @@ public class DeviceStore
         {
             using var connection = OpenConnection();
             InitializeDatabase(connection);
+            EnsureAutomationSchema(connection);
             SeedIfNeeded(connection);
             SyncLegacyDevicesJson(connection);
         }
@@ -58,27 +56,43 @@ public class DeviceStore
         }
     }
 
-    public Device AddDevice(string name, string? roomName, int? roomId, bool isOn, string? type, string? provider, string? identifier, Dictionary<string, string>? connection)
+    public Device AddDevice(
+        string name,
+        string? roomName,
+        int? roomId,
+        bool isOn,
+        string? type,
+        string? provider,
+        string? protocol,
+        string? channel,
+        string? externalId,
+        string? manufacturer,
+        string? model,
+        Dictionary<string, string>? connection)
     {
         var cleanName = NormalizeRequired(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED");
         var cleanType = NormalizeOptional(type, "Другое");
         var cleanProvider = NormalizeOptional(provider, "mock");
-        var cleanIdentifier = NormalizeIdentifier(identifier);
-        var connectionData = connection ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var cleanProtocol = NormalizeOptional(protocol, InferProtocol(cleanProvider));
+        var cleanChannel = NormalizeOptional(channel, InferChannel(cleanProtocol));
+        var cleanExternalId = NormalizeRequired(externalId, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED");
+        var cleanManufacturer = NormalizeOptional(manufacturer, string.Empty);
+        var cleanModel = NormalizeOptional(model, string.Empty);
+        var connectionData = NormalizeConnection(connection);
 
         lock (_sync)
         {
             using var db = OpenConnection();
-            EnsureDeviceIdentifierIsUnique(db, cleanIdentifier, null);
-            var validation = ValidateConnection(cleanProvider, connectionData);
+            EnsureDeviceExternalIdIsUnique(db, cleanExternalId, null);
+            var connectionCheck = ValidateConnectionInternal(cleanProvider, cleanProtocol, connectionData);
             using var transaction = db.BeginTransaction();
             var resolvedRoomId = ResolveRoomId(db, transaction, roomId, roomName, createIfMissing: true);
 
             var command = db.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
-INSERT INTO Devices (Name, RoomId, IsOn, Type, Provider, Identifier, ConnectionStatus, LastSeenAt, ConnectionJson, CreatedAt, UpdatedAt)
-VALUES (@name, @roomId, @isOn, @type, @provider, @identifier, @connectionStatus, @lastSeenAt, @connectionJson, @createdAt, @updatedAt);
+INSERT INTO Devices (Name, RoomId, IsOn, Type, Provider, Protocol, Channel, ExternalId, Manufacturer, Model, ConnectionJson, ConnectionStatus, ConnectionMessage, LastConnectionCheckAt, CreatedAt, UpdatedAt)
+VALUES (@name, @roomId, @isOn, @type, @provider, @protocol, @channel, @externalId, @manufacturer, @model, @connectionJson, @connectionStatus, @connectionMessage, @lastConnectionCheckAt, @createdAt, @updatedAt);
 SELECT last_insert_rowid();";
             var now = DateTime.UtcNow;
             command.Parameters.AddWithValue("@name", cleanName);
@@ -86,15 +100,20 @@ SELECT last_insert_rowid();";
             command.Parameters.AddWithValue("@isOn", isOn ? 1 : 0);
             command.Parameters.AddWithValue("@type", cleanType);
             command.Parameters.AddWithValue("@provider", cleanProvider);
-            command.Parameters.AddWithValue("@identifier", (object?)cleanIdentifier ?? DBNull.Value);
-            command.Parameters.AddWithValue("@connectionStatus", validation.Ok ? "connected" : "no_connection");
-            command.Parameters.AddWithValue("@lastSeenAt", validation.Ok ? now.ToString("O") : DBNull.Value);
+            command.Parameters.AddWithValue("@protocol", cleanProtocol);
+            command.Parameters.AddWithValue("@channel", cleanChannel);
+            command.Parameters.AddWithValue("@externalId", cleanExternalId);
+            command.Parameters.AddWithValue("@manufacturer", cleanManufacturer);
+            command.Parameters.AddWithValue("@model", cleanModel);
             command.Parameters.AddWithValue("@connectionJson", JsonSerializer.Serialize(connectionData, _jsonOptions));
+            command.Parameters.AddWithValue("@connectionStatus", connectionCheck.Status);
+            command.Parameters.AddWithValue("@connectionMessage", connectionCheck.Message);
+            command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
             command.Parameters.AddWithValue("@createdAt", now.ToString("O"));
             command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
             var insertedId = Convert.ToInt32((long)(command.ExecuteScalar() ?? 0));
 
-            LogEvent(db, transaction, validation.Ok ? "info" : "warning", "api", "DEVICE_CREATED", $"Создано устройство «{cleanName}». Проверка связи: {validation.Message}", deviceId: insertedId, roomId: resolvedRoomId);
+            LogEvent(db, transaction, "info", "api", "DEVICE_CREATED", $"Создано устройство «{cleanName}» со статусом «{connectionCheck.Status}»", deviceId: insertedId, roomId: resolvedRoomId);
             transaction.Commit();
 
             SyncLegacyDevicesJson(db);
@@ -102,7 +121,20 @@ SELECT last_insert_rowid();";
         }
     }
 
-    public Device UpdateDevice(int id, string? name, string? roomName, int? roomId, bool? isOn, string? type, string? provider, string? identifier, Dictionary<string, string>? connection)
+    public Device UpdateDevice(
+        int id,
+        string? name,
+        string? roomName,
+        int? roomId,
+        bool? isOn,
+        string? type,
+        string? provider,
+        string? protocol,
+        string? channel,
+        string? externalId,
+        string? manufacturer,
+        string? model,
+        Dictionary<string, string>? connection)
     {
         lock (_sync)
         {
@@ -113,13 +145,17 @@ SELECT last_insert_rowid();";
             var finalName = string.IsNullOrWhiteSpace(name) ? current.Name : NormalizeRequired(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED");
             var finalType = string.IsNullOrWhiteSpace(type) ? current.Type : NormalizeOptional(type, current.Type);
             var finalProvider = string.IsNullOrWhiteSpace(provider) ? current.Provider : NormalizeOptional(provider, current.Provider);
-            var finalIdentifier = string.IsNullOrWhiteSpace(identifier) ? current.Identifier : NormalizeIdentifier(identifier);
-            var finalConnection = connection is null || connection.Count == 0 ? current.Connection : connection;
-            var validation = ValidateConnection(finalProvider, finalConnection);
+            var finalProtocol = string.IsNullOrWhiteSpace(protocol) ? current.Protocol : NormalizeOptional(protocol, current.Protocol);
+            var finalChannel = string.IsNullOrWhiteSpace(channel) ? current.Channel : NormalizeOptional(channel, current.Channel);
+            var finalExternalId = string.IsNullOrWhiteSpace(externalId) ? current.ExternalId : NormalizeRequired(externalId, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED");
+            var finalManufacturer = manufacturer is null ? current.Manufacturer : NormalizeOptional(manufacturer, string.Empty);
+            var finalModel = model is null ? current.Model : NormalizeOptional(model, string.Empty);
+            var finalConnection = connection is null || connection.Count == 0 ? current.Connection : NormalizeConnection(connection);
             var finalIsOn = isOn ?? current.IsOn;
             var finalRoomId = ResolveRoomId(db, transaction, roomId ?? current.RoomId, roomName, createIfMissing: !string.IsNullOrWhiteSpace(roomName));
             var now = DateTime.UtcNow;
-            EnsureDeviceIdentifierIsUnique(db, finalIdentifier, id);
+            EnsureDeviceExternalIdIsUnique(db, finalExternalId, id);
+            var connectionCheck = ValidateConnectionInternal(finalProvider, finalProtocol, finalConnection);
 
             var command = db.CreateCommand();
             command.Transaction = transaction;
@@ -130,10 +166,15 @@ SET Name = @name,
     IsOn = @isOn,
     Type = @type,
     Provider = @provider,
-    Identifier = @identifier,
-    ConnectionStatus = @connectionStatus,
-    LastSeenAt = @lastSeenAt,
+    Protocol = @protocol,
+    Channel = @channel,
+    ExternalId = @externalId,
+    Manufacturer = @manufacturer,
+    Model = @model,
     ConnectionJson = @connectionJson,
+    ConnectionStatus = @connectionStatus,
+    ConnectionMessage = @connectionMessage,
+    LastConnectionCheckAt = @lastConnectionCheckAt,
     UpdatedAt = @updatedAt
 WHERE Id = @id;";
             command.Parameters.AddWithValue("@id", id);
@@ -142,14 +183,19 @@ WHERE Id = @id;";
             command.Parameters.AddWithValue("@isOn", finalIsOn ? 1 : 0);
             command.Parameters.AddWithValue("@type", finalType);
             command.Parameters.AddWithValue("@provider", finalProvider);
-            command.Parameters.AddWithValue("@identifier", (object?)finalIdentifier ?? DBNull.Value);
-            command.Parameters.AddWithValue("@connectionStatus", validation.Ok ? "connected" : "no_connection");
-            command.Parameters.AddWithValue("@lastSeenAt", validation.Ok ? now.ToString("O") : DBNull.Value);
+            command.Parameters.AddWithValue("@protocol", finalProtocol);
+            command.Parameters.AddWithValue("@channel", finalChannel);
+            command.Parameters.AddWithValue("@externalId", finalExternalId);
+            command.Parameters.AddWithValue("@manufacturer", finalManufacturer);
+            command.Parameters.AddWithValue("@model", finalModel);
             command.Parameters.AddWithValue("@connectionJson", JsonSerializer.Serialize(finalConnection, _jsonOptions));
+            command.Parameters.AddWithValue("@connectionStatus", connectionCheck.Status);
+            command.Parameters.AddWithValue("@connectionMessage", connectionCheck.Message);
+            command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
             command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
             command.ExecuteNonQuery();
 
-            LogEvent(db, transaction, validation.Ok ? "info" : "warning", "api", "DEVICE_UPDATED", $"Обновлено устройство «{finalName}». Проверка связи: {validation.Message}", deviceId: id, roomId: finalRoomId);
+            LogEvent(db, transaction, "info", "api", "DEVICE_UPDATED", $"Обновлено устройство «{finalName}» со статусом «{connectionCheck.Status}»", deviceId: id, roomId: finalRoomId);
             transaction.Commit();
 
             SyncLegacyDevicesJson(db);
@@ -598,298 +644,6 @@ LIMIT @limit;";
         }
     }
 
-    public ConnectionValidationResult ValidateDeviceConnection(string? provider, Dictionary<string, string>? connection)
-    {
-        var cleanProvider = NormalizeOptional(provider, "mock");
-        return ValidateConnection(cleanProvider, connection ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase));
-    }
-
-    public IReadOnlyList<AutomationRule> GetRules()
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            var command = db.CreateCommand();
-            command.CommandText = @"
-SELECT r.Id, r.Name, r.IsEnabled, r.SourceDeviceId, d.Name, r.EventType, r.Operator, r.CompareValue,
-       r.ActionType, r.ActionSceneId, r.ActionDeviceId, r.ActionTargetIsOn, r.CreatedAt, r.UpdatedAt, r.LastTriggeredAt, r.TriggerCount
-FROM AutomationRules r
-INNER JOIN Devices d ON d.Id = r.SourceDeviceId
-ORDER BY r.Name;";
-            var items = new List<AutomationRule>();
-            using var reader = command.ExecuteReader();
-            while (reader.Read())
-            {
-                items.Add(new AutomationRule
-                {
-                    Id = reader.GetInt32(0),
-                    Name = reader.GetString(1),
-                    IsEnabled = reader.GetInt32(2) == 1,
-                    SourceDeviceId = reader.GetInt32(3),
-                    SourceDeviceName = reader.GetString(4),
-                    EventType = reader.GetString(5),
-                    Operator = reader.GetString(6),
-                    CompareValue = reader.GetString(7),
-                    ActionType = reader.GetString(8),
-                    ActionSceneId = reader.IsDBNull(9) ? null : reader.GetInt32(9),
-                    ActionDeviceId = reader.IsDBNull(10) ? null : reader.GetInt32(10),
-                    ActionTargetIsOn = reader.IsDBNull(11) ? null : reader.GetInt32(11) == 1,
-                    CreatedAt = ParseUtc(reader.GetString(12)),
-                    UpdatedAt = ParseUtc(reader.GetString(13)),
-                    LastTriggeredAt = reader.IsDBNull(14) ? null : ParseUtc(reader.GetString(14)),
-                    TriggerCount = reader.GetInt32(15),
-                });
-            }
-            return items;
-        }
-    }
-
-    public AutomationRule CreateRule(string name, bool isEnabled, int sourceDeviceId, string eventType, string op, string compareValue, string actionType, int? actionSceneId, int? actionDeviceId, bool? actionTargetIsOn)
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            ValidateRulePayload(db, sourceDeviceId, actionType, actionSceneId, actionDeviceId, actionTargetIsOn);
-            var now = DateTime.UtcNow;
-            using var tx = db.BeginTransaction();
-            var command = db.CreateCommand();
-            command.Transaction = tx;
-            command.CommandText = @"INSERT INTO AutomationRules (Name, IsEnabled, SourceDeviceId, EventType, Operator, CompareValue, ActionType, ActionSceneId, ActionDeviceId, ActionTargetIsOn, CreatedAt, UpdatedAt)
-VALUES (@name,@isEnabled,@sourceDeviceId,@eventType,@op,@compareValue,@actionType,@actionSceneId,@actionDeviceId,@actionTargetIsOn,@createdAt,@updatedAt);
-SELECT last_insert_rowid();";
-            command.Parameters.AddWithValue("@name", NormalizeRequired(name, "Название правила обязательно", "RULE_NAME_REQUIRED"));
-            command.Parameters.AddWithValue("@isEnabled", isEnabled ? 1 : 0);
-            command.Parameters.AddWithValue("@sourceDeviceId", sourceDeviceId);
-            command.Parameters.AddWithValue("@eventType", NormalizeOptional(eventType, "state"));
-            command.Parameters.AddWithValue("@op", NormalizeOptional(op, "eq"));
-            command.Parameters.AddWithValue("@compareValue", NormalizeOptional(compareValue, ""));
-            command.Parameters.AddWithValue("@actionType", NormalizeOptional(actionType, "scene"));
-            command.Parameters.AddWithValue("@actionSceneId", (object?)actionSceneId ?? DBNull.Value);
-            command.Parameters.AddWithValue("@actionDeviceId", (object?)actionDeviceId ?? DBNull.Value);
-            command.Parameters.AddWithValue("@actionTargetIsOn", actionTargetIsOn.HasValue ? (actionTargetIsOn.Value ? 1 : 0) : DBNull.Value);
-            command.Parameters.AddWithValue("@createdAt", now.ToString("O"));
-            command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
-            var id = Convert.ToInt32((long)(command.ExecuteScalar() ?? 0));
-            LogEvent(db, tx, "info", "automation", "RULE_CREATED", $"Создано правило «{name}»");
-            tx.Commit();
-            return GetRules().First(x => x.Id == id);
-        }
-    }
-
-    public void DeleteRule(int id)
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            var cmd = db.CreateCommand();
-            cmd.CommandText = "DELETE FROM AutomationRules WHERE Id = @id;";
-            cmd.Parameters.AddWithValue("@id", id);
-            if (cmd.ExecuteNonQuery() == 0)
-            {
-                throw new NotFoundProblemException("Правило не найдено", "RULE_NOT_FOUND");
-            }
-        }
-    }
-
-    public IReadOnlyList<RuleTriggerLog> GetRuleTriggerLogs(int limit = 50)
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            var cmd = db.CreateCommand();
-            cmd.CommandText = @"SELECT l.Id, l.RuleId, r.Name, l.TriggeredAt, l.EventType, l.EventValue, l.Status, l.Message
-FROM RuleTriggerLogs l
-INNER JOIN AutomationRules r ON r.Id = l.RuleId
-ORDER BY l.TriggeredAt DESC, l.Id DESC
-LIMIT @limit;";
-            cmd.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 200));
-            var items = new List<RuleTriggerLog>();
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                items.Add(new RuleTriggerLog
-                {
-                    Id = reader.GetInt32(0),
-                    RuleId = reader.GetInt32(1),
-                    RuleName = reader.GetString(2),
-                    TriggeredAt = ParseUtc(reader.GetString(3)),
-                    EventType = reader.GetString(4),
-                    EventValue = reader.GetString(5),
-                    Status = reader.GetString(6),
-                    Message = reader.GetString(7),
-                });
-            }
-            return items;
-        }
-    }
-
-    public RuleEventResult ProcessEvent(int deviceId, string eventType, string value)
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            _ = ReadDeviceOrThrow(db, deviceId);
-            var rules = GetRules().Where(r => r.IsEnabled && r.SourceDeviceId == deviceId && string.Equals(r.EventType, eventType, StringComparison.OrdinalIgnoreCase)).ToList();
-            var triggered = 0;
-            foreach (var rule in rules)
-            {
-                if (!IsRuleMatch(rule.Operator, rule.CompareValue, value))
-                {
-                    continue;
-                }
-
-                triggered++;
-                var status = "completed";
-                var message = ExecuteAction(rule.ActionType, rule.ActionSceneId, rule.ActionDeviceId, rule.ActionTargetIsOn);
-
-                using var tx = db.BeginTransaction();
-                var upd = db.CreateCommand();
-                upd.Transaction = tx;
-                upd.CommandText = "UPDATE AutomationRules SET TriggerCount = TriggerCount + 1, LastTriggeredAt = @now, UpdatedAt = @now WHERE Id = @id;";
-                var now = DateTime.UtcNow;
-                upd.Parameters.AddWithValue("@now", now.ToString("O"));
-                upd.Parameters.AddWithValue("@id", rule.Id);
-                upd.ExecuteNonQuery();
-
-                var log = db.CreateCommand();
-                log.Transaction = tx;
-                log.CommandText = "INSERT INTO RuleTriggerLogs (RuleId, TriggeredAt, EventType, EventValue, Status, Message) VALUES (@ruleId, @ts, @eventType, @eventValue, @status, @message);";
-                log.Parameters.AddWithValue("@ruleId", rule.Id);
-                log.Parameters.AddWithValue("@ts", now.ToString("O"));
-                log.Parameters.AddWithValue("@eventType", eventType);
-                log.Parameters.AddWithValue("@eventValue", value);
-                log.Parameters.AddWithValue("@status", status);
-                log.Parameters.AddWithValue("@message", message);
-                log.ExecuteNonQuery();
-                LogEvent(db, tx, "info", "automation", "RULE_TRIGGERED", $"Сработало правило «{rule.Name}»: {message}", deviceId: deviceId);
-                tx.Commit();
-            }
-
-            return new RuleEventResult(rules.Count, triggered, triggered == 0 ? "Совпадений не найдено" : "Правила обработаны");
-        }
-    }
-
-    public IReadOnlyList<ScheduleEntry> GetSchedules()
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            var cmd = db.CreateCommand();
-            cmd.CommandText = "SELECT Id, Name, IsEnabled, DaysOfWeek, TimeOfDay, ActionType, ActionSceneId, ActionDeviceId, ActionTargetIsOn, CreatedAt, UpdatedAt, LastRunAt FROM Schedules ORDER BY Name;";
-            var items = new List<ScheduleEntry>();
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                items.Add(new ScheduleEntry
-                {
-                    Id = reader.GetInt32(0), Name = reader.GetString(1), IsEnabled = reader.GetInt32(2) == 1, DaysOfWeek = reader.GetString(3), TimeOfDay = reader.GetString(4), ActionType = reader.GetString(5),
-                    ActionSceneId = reader.IsDBNull(6) ? null : reader.GetInt32(6), ActionDeviceId = reader.IsDBNull(7) ? null : reader.GetInt32(7), ActionTargetIsOn = reader.IsDBNull(8) ? null : reader.GetInt32(8) == 1,
-                    CreatedAt = ParseUtc(reader.GetString(9)), UpdatedAt = ParseUtc(reader.GetString(10)), LastRunAt = reader.IsDBNull(11) ? null : ParseUtc(reader.GetString(11)),
-                });
-            }
-            return items;
-        }
-    }
-
-    public ScheduleEntry CreateSchedule(string name, bool isEnabled, string daysOfWeek, string timeOfDay, string actionType, int? actionSceneId, int? actionDeviceId, bool? actionTargetIsOn)
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            ValidateSchedulePayload(db, actionType, actionSceneId, actionDeviceId, actionTargetIsOn, timeOfDay);
-            using var tx = db.BeginTransaction();
-            var now = DateTime.UtcNow;
-            var cmd = db.CreateCommand();
-            cmd.Transaction = tx;
-            cmd.CommandText = @"INSERT INTO Schedules (Name, IsEnabled, DaysOfWeek, TimeOfDay, ActionType, ActionSceneId, ActionDeviceId, ActionTargetIsOn, CreatedAt, UpdatedAt)
-VALUES (@name,@isEnabled,@days,@time,@actionType,@sceneId,@deviceId,@target,@created,@updated); SELECT last_insert_rowid();";
-            cmd.Parameters.AddWithValue("@name", NormalizeRequired(name, "Название расписания обязательно", "SCHEDULE_NAME_REQUIRED"));
-            cmd.Parameters.AddWithValue("@isEnabled", isEnabled ? 1 : 0);
-            cmd.Parameters.AddWithValue("@days", NormalizeOptional(daysOfWeek, "1,2,3,4,5,6,7"));
-            cmd.Parameters.AddWithValue("@time", timeOfDay);
-            cmd.Parameters.AddWithValue("@actionType", actionType);
-            cmd.Parameters.AddWithValue("@sceneId", (object?)actionSceneId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@deviceId", (object?)actionDeviceId ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("@target", actionTargetIsOn.HasValue ? (actionTargetIsOn.Value ? 1 : 0) : DBNull.Value);
-            cmd.Parameters.AddWithValue("@created", now.ToString("O"));
-            cmd.Parameters.AddWithValue("@updated", now.ToString("O"));
-            var id = Convert.ToInt32((long)(cmd.ExecuteScalar() ?? 0));
-            LogEvent(db, tx, "info", "scheduler", "SCHEDULE_CREATED", $"Создано расписание «{name}»");
-            tx.Commit();
-            return GetSchedules().First(x => x.Id == id);
-        }
-    }
-
-    public void DeleteSchedule(int id)
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            var cmd = db.CreateCommand();
-            cmd.CommandText = "DELETE FROM Schedules WHERE Id = @id;";
-            cmd.Parameters.AddWithValue("@id", id);
-            if (cmd.ExecuteNonQuery() == 0)
-            {
-                throw new NotFoundProblemException("Расписание не найдено", "SCHEDULE_NOT_FOUND");
-            }
-        }
-    }
-
-    public IReadOnlyList<ScheduleRunLog> GetScheduleRuns(int limit = 50)
-    {
-        lock (_sync)
-        {
-            using var db = OpenConnection();
-            var cmd = db.CreateCommand();
-            cmd.CommandText = @"SELECT sr.Id, sr.ScheduleId, s.Name, sr.StartedAt, sr.Status, sr.Message
-FROM ScheduleRuns sr INNER JOIN Schedules s ON s.Id = sr.ScheduleId
-ORDER BY sr.StartedAt DESC, sr.Id DESC LIMIT @limit;";
-            cmd.Parameters.AddWithValue("@limit", Math.Clamp(limit, 1, 200));
-            var items = new List<ScheduleRunLog>();
-            using var reader = cmd.ExecuteReader();
-            while (reader.Read())
-            {
-                items.Add(new ScheduleRunLog { Id = reader.GetInt32(0), ScheduleId = reader.GetInt32(1), ScheduleName = reader.GetString(2), StartedAt = ParseUtc(reader.GetString(3)), Status = reader.GetString(4), Message = reader.GetString(5) });
-            }
-            return items;
-        }
-    }
-
-    public ScheduleRunResult RunDueSchedules(DateTime utcNow)
-    {
-        lock (_sync)
-        {
-            var schedules = GetSchedules().Where(x => x.IsEnabled && IsScheduleDue(x, utcNow)).ToList();
-            var started = 0;
-            using var db = OpenConnection();
-            foreach (var schedule in schedules)
-            {
-                started++;
-                var message = ExecuteAction(schedule.ActionType, schedule.ActionSceneId, schedule.ActionDeviceId, schedule.ActionTargetIsOn);
-                using var tx = db.BeginTransaction();
-                var now = DateTime.UtcNow;
-                var upd = db.CreateCommand();
-                upd.Transaction = tx;
-                upd.CommandText = "UPDATE Schedules SET LastRunAt = @lastRunAt, UpdatedAt = @updatedAt WHERE Id = @id;";
-                upd.Parameters.AddWithValue("@lastRunAt", now.ToString("O"));
-                upd.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
-                upd.Parameters.AddWithValue("@id", schedule.Id);
-                upd.ExecuteNonQuery();
-                var log = db.CreateCommand();
-                log.Transaction = tx;
-                log.CommandText = "INSERT INTO ScheduleRuns (ScheduleId, StartedAt, Status, Message) VALUES (@scheduleId, @startedAt, @status, @message);";
-                log.Parameters.AddWithValue("@scheduleId", schedule.Id);
-                log.Parameters.AddWithValue("@startedAt", now.ToString("O"));
-                log.Parameters.AddWithValue("@status", "completed");
-                log.Parameters.AddWithValue("@message", message);
-                log.ExecuteNonQuery();
-                LogEvent(db, tx, "info", "scheduler", "SCHEDULE_TRIGGERED", $"Сработало расписание «{schedule.Name}»: {message}");
-                tx.Commit();
-            }
-            return new ScheduleRunResult(schedules.Count, started, started == 0 ? "Нет задач для запуска" : "Расписание выполнено");
-        }
-    }
-
     private void InitializeDatabase(SqliteConnection connection)
     {
         var command = connection.CreateCommand();
@@ -909,9 +663,6 @@ CREATE TABLE IF NOT EXISTS Devices (
     IsOn INTEGER NOT NULL,
     Type TEXT NOT NULL DEFAULT 'Другое',
     Provider TEXT NOT NULL DEFAULT 'mock',
-    Identifier TEXT NULL,
-    ConnectionStatus TEXT NOT NULL DEFAULT 'unknown',
-    LastSeenAt TEXT NULL,
     ConnectionJson TEXT NOT NULL DEFAULT '{}',
     CreatedAt TEXT NOT NULL,
     UpdatedAt TEXT NOT NULL,
@@ -949,65 +700,6 @@ CREATE TABLE IF NOT EXISTS SceneRuns (
     FOREIGN KEY(SceneId) REFERENCES Scenes(Id) ON DELETE CASCADE
 );
 
-
-CREATE TABLE IF NOT EXISTS AutomationRules (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    Name TEXT NOT NULL,
-    IsEnabled INTEGER NOT NULL,
-    SourceDeviceId INTEGER NOT NULL,
-    EventType TEXT NOT NULL,
-    Operator TEXT NOT NULL,
-    CompareValue TEXT NOT NULL,
-    ActionType TEXT NOT NULL,
-    ActionSceneId INTEGER NULL,
-    ActionDeviceId INTEGER NULL,
-    ActionTargetIsOn INTEGER NULL,
-    LastTriggeredAt TEXT NULL,
-    TriggerCount INTEGER NOT NULL DEFAULT 0,
-    CreatedAt TEXT NOT NULL,
-    UpdatedAt TEXT NOT NULL,
-    FOREIGN KEY(SourceDeviceId) REFERENCES Devices(Id) ON DELETE CASCADE,
-    FOREIGN KEY(ActionSceneId) REFERENCES Scenes(Id) ON DELETE SET NULL,
-    FOREIGN KEY(ActionDeviceId) REFERENCES Devices(Id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS RuleTriggerLogs (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    RuleId INTEGER NOT NULL,
-    TriggeredAt TEXT NOT NULL,
-    EventType TEXT NOT NULL,
-    EventValue TEXT NOT NULL,
-    Status TEXT NOT NULL,
-    Message TEXT NOT NULL,
-    FOREIGN KEY(RuleId) REFERENCES AutomationRules(Id) ON DELETE CASCADE
-);
-
-CREATE TABLE IF NOT EXISTS Schedules (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    Name TEXT NOT NULL,
-    IsEnabled INTEGER NOT NULL,
-    DaysOfWeek TEXT NOT NULL,
-    TimeOfDay TEXT NOT NULL,
-    ActionType TEXT NOT NULL,
-    ActionSceneId INTEGER NULL,
-    ActionDeviceId INTEGER NULL,
-    ActionTargetIsOn INTEGER NULL,
-    LastRunAt TEXT NULL,
-    CreatedAt TEXT NOT NULL,
-    UpdatedAt TEXT NOT NULL,
-    FOREIGN KEY(ActionSceneId) REFERENCES Scenes(Id) ON DELETE SET NULL,
-    FOREIGN KEY(ActionDeviceId) REFERENCES Devices(Id) ON DELETE SET NULL
-);
-
-CREATE TABLE IF NOT EXISTS ScheduleRuns (
-    Id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ScheduleId INTEGER NOT NULL,
-    StartedAt TEXT NOT NULL,
-    Status TEXT NOT NULL,
-    Message TEXT NOT NULL,
-    FOREIGN KEY(ScheduleId) REFERENCES Schedules(Id) ON DELETE CASCADE
-);
-
 CREATE TABLE IF NOT EXISTS EventLogs (
     Id INTEGER PRIMARY KEY AUTOINCREMENT,
     Ts TEXT NOT NULL,
@@ -1022,14 +714,6 @@ CREATE TABLE IF NOT EXISTS EventLogs (
     RunId INTEGER NULL
 );";
         command.ExecuteNonQuery();
-
-        AddColumnIfMissing(connection, "Devices", "Identifier", "TEXT NULL");
-        AddColumnIfMissing(connection, "Devices", "ConnectionStatus", "TEXT NOT NULL DEFAULT 'unknown'");
-        AddColumnIfMissing(connection, "Devices", "LastSeenAt", "TEXT NULL");
-
-        var idxCommand = connection.CreateCommand();
-        idxCommand.CommandText = "CREATE UNIQUE INDEX IF NOT EXISTS IX_Devices_Identifier_Unique ON Devices(Identifier) WHERE Identifier IS NOT NULL;";
-        idxCommand.ExecuteNonQuery();
     }
 
     private void SeedIfNeeded(SqliteConnection connection)
@@ -1132,10 +816,16 @@ SELECT d.Id,
        d.IsOn,
        d.Type,
        d.Provider,
-       d.Identifier,
-       d.ConnectionStatus,
-       d.LastSeenAt,
+       d.Protocol,
+       d.Channel,
+       COALESCE(d.ExternalId, ''),
+       COALESCE(d.Manufacturer, ''),
+       COALESCE(d.Model, ''),
        d.ConnectionJson,
+       COALESCE(d.ConnectionStatus, 'unknown'),
+       COALESCE(d.ConnectionMessage, ''),
+       d.LastConnectionCheckAt,
+       d.LastSeenAt,
        d.CreatedAt,
        d.UpdatedAt
 FROM Devices d
@@ -1155,12 +845,18 @@ ORDER BY d.Name;";
                 IsOn = reader.GetInt32(4) == 1,
                 Type = reader.GetString(5),
                 Provider = reader.GetString(6),
-                Identifier = reader.IsDBNull(7) ? null : reader.GetString(7),
-                ConnectionStatus = reader.IsDBNull(8) ? "unknown" : reader.GetString(8),
-                LastSeenAt = reader.IsDBNull(9) ? null : ParseUtc(reader.GetString(9)),
-                Connection = DeserializeConnection(reader.GetString(10)),
-                CreatedAt = ParseUtc(reader.GetString(11)),
-                UpdatedAt = ParseUtc(reader.GetString(12)),
+                Protocol = reader.GetString(7),
+                Channel = reader.GetString(8),
+                ExternalId = reader.GetString(9),
+                Manufacturer = reader.GetString(10),
+                Model = reader.GetString(11),
+                Connection = DeserializeConnection(reader.GetString(12)),
+                ConnectionStatus = reader.GetString(13),
+                ConnectionMessage = reader.GetString(14),
+                LastConnectionCheckAt = reader.IsDBNull(15) ? null : ParseUtc(reader.GetString(15)),
+                LastSeenAt = reader.IsDBNull(16) ? null : ParseUtc(reader.GetString(16)),
+                CreatedAt = ParseUtc(reader.GetString(17)),
+                UpdatedAt = ParseUtc(reader.GetString(18)),
             });
         }
 
@@ -1178,10 +874,16 @@ SELECT d.Id,
        d.IsOn,
        d.Type,
        d.Provider,
-       d.Identifier,
-       d.ConnectionStatus,
-       d.LastSeenAt,
+       d.Protocol,
+       d.Channel,
+       COALESCE(d.ExternalId, ''),
+       COALESCE(d.Manufacturer, ''),
+       COALESCE(d.Model, ''),
        d.ConnectionJson,
+       COALESCE(d.ConnectionStatus, 'unknown'),
+       COALESCE(d.ConnectionMessage, ''),
+       d.LastConnectionCheckAt,
+       d.LastSeenAt,
        d.CreatedAt,
        d.UpdatedAt
 FROM Devices d
@@ -1203,12 +905,18 @@ WHERE d.Id = @id;";
             IsOn = reader.GetInt32(4) == 1,
             Type = reader.GetString(5),
             Provider = reader.GetString(6),
-            Identifier = reader.IsDBNull(7) ? null : reader.GetString(7),
-            ConnectionStatus = reader.IsDBNull(8) ? "unknown" : reader.GetString(8),
-            LastSeenAt = reader.IsDBNull(9) ? null : ParseUtc(reader.GetString(9)),
-            Connection = DeserializeConnection(reader.GetString(10)),
-            CreatedAt = ParseUtc(reader.GetString(11)),
-            UpdatedAt = ParseUtc(reader.GetString(12)),
+            Protocol = reader.GetString(7),
+            Channel = reader.GetString(8),
+            ExternalId = reader.GetString(9),
+            Manufacturer = reader.GetString(10),
+            Model = reader.GetString(11),
+            Connection = DeserializeConnection(reader.GetString(12)),
+            ConnectionStatus = reader.GetString(13),
+            ConnectionMessage = reader.GetString(14),
+            LastConnectionCheckAt = reader.IsDBNull(15) ? null : ParseUtc(reader.GetString(15)),
+            LastSeenAt = reader.IsDBNull(16) ? null : ParseUtc(reader.GetString(16)),
+            CreatedAt = ParseUtc(reader.GetString(17)),
+            UpdatedAt = ParseUtc(reader.GetString(18)),
         };
     }
 
@@ -1426,15 +1134,23 @@ SELECT last_insert_rowid();";
         var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText = @"
-INSERT INTO Devices (Name, RoomId, IsOn, Type, Provider, Identifier, ConnectionStatus, LastSeenAt, ConnectionJson, CreatedAt, UpdatedAt)
-VALUES (@name, @roomId, @isOn, @type, @provider, NULL, 'unknown', NULL, @connectionJson, @createdAt, @updatedAt);
+INSERT INTO Devices (Name, RoomId, IsOn, Type, Provider, Protocol, Channel, ExternalId, Manufacturer, Model, ConnectionJson, ConnectionStatus, ConnectionMessage, LastConnectionCheckAt, CreatedAt, UpdatedAt)
+VALUES (@name, @roomId, @isOn, @type, @provider, @protocol, @channel, @externalId, @manufacturer, @model, @connectionJson, @connectionStatus, @connectionMessage, @lastConnectionCheckAt, @createdAt, @updatedAt);
 SELECT last_insert_rowid();";
         command.Parameters.AddWithValue("@name", name);
         command.Parameters.AddWithValue("@roomId", roomId);
         command.Parameters.AddWithValue("@isOn", isOn ? 1 : 0);
         command.Parameters.AddWithValue("@type", type);
         command.Parameters.AddWithValue("@provider", provider);
+        command.Parameters.AddWithValue("@protocol", InferProtocol(provider));
+        command.Parameters.AddWithValue("@channel", InferChannel(InferProtocol(provider)));
+        command.Parameters.AddWithValue("@externalId", $"legacy-{Guid.NewGuid():N}"[..18]);
+        command.Parameters.AddWithValue("@manufacturer", string.Empty);
+        command.Parameters.AddWithValue("@model", string.Empty);
         command.Parameters.AddWithValue("@connectionJson", JsonSerializer.Serialize(connectionData, _jsonOptions));
+        command.Parameters.AddWithValue("@connectionStatus", provider == "mock" ? "connected" : "unknown");
+        command.Parameters.AddWithValue("@connectionMessage", provider == "mock" ? "Локальное устройство" : "Импортировано без проверки связи");
+        command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
         command.Parameters.AddWithValue("@createdAt", now.ToString("O"));
         command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
         return Convert.ToInt32((long)(command.ExecuteScalar() ?? 0));
@@ -1587,244 +1303,6 @@ VALUES (@ts, @severity, @source, @eventType, @message, @userId, @deviceId, @room
         return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
     }
 
-    private static string? NormalizeIdentifier(string? identifier)
-    {
-        var normalized = identifier?.Trim();
-        return string.IsNullOrWhiteSpace(normalized) ? null : normalized;
-    }
-
-    private void EnsureDeviceIdentifierIsUnique(SqliteConnection connection, string? identifier, int? currentDeviceId)
-    {
-        if (string.IsNullOrWhiteSpace(identifier))
-        {
-            return;
-        }
-
-        var command = connection.CreateCommand();
-        command.CommandText = "SELECT Id FROM Devices WHERE lower(Identifier) = lower(@identifier) LIMIT 1;";
-        command.Parameters.AddWithValue("@identifier", identifier);
-        var existing = command.ExecuteScalar();
-        if (existing is long id && (!currentDeviceId.HasValue || currentDeviceId.Value != Convert.ToInt32(id)))
-        {
-            throw new ConflictProblemException("Устройство с таким идентификатором уже существует", "DEVICE_IDENTIFIER_EXISTS");
-        }
-    }
-
-    private static ConnectionValidationResult ValidateConnection(string provider, Dictionary<string, string> connection)
-    {
-        var cleanProvider = NormalizeOptional(provider, "mock").ToLowerInvariant();
-        if (cleanProvider == "mock")
-        {
-            return new ConnectionValidationResult(true, "Локальное устройство подключено");
-        }
-
-        if (cleanProvider == "http")
-        {
-            if (!connection.TryGetValue("url", out var url) || string.IsNullOrWhiteSpace(url))
-            {
-                return new ConnectionValidationResult(false, "Для HTTP-провайдера требуется поле url");
-            }
-
-            try
-            {
-                using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
-                using var request = new HttpRequestMessage(HttpMethod.Head, url);
-                var response = client.Send(request);
-                return response.IsSuccessStatusCode
-                    ? new ConnectionValidationResult(true, $"HTTP OK ({(int)response.StatusCode})")
-                    : new ConnectionValidationResult(false, $"HTTP недоступен ({(int)response.StatusCode})");
-            }
-            catch (Exception ex)
-            {
-                return new ConnectionValidationResult(false, $"HTTP ошибка: {ex.Message}");
-            }
-        }
-
-        if (cleanProvider is "tcp" or "mqtt")
-        {
-            if (!connection.TryGetValue("host", out var host) || string.IsNullOrWhiteSpace(host))
-            {
-                return new ConnectionValidationResult(false, "Требуется host");
-            }
-
-            if (!connection.TryGetValue("port", out var portRaw) || !int.TryParse(portRaw, out var port))
-            {
-                return new ConnectionValidationResult(false, "Требуется корректный port");
-            }
-
-            try
-            {
-                using var client = new TcpClient();
-                var connectTask = client.ConnectAsync(host, port);
-                var finished = connectTask.Wait(TimeSpan.FromSeconds(3));
-                return finished && client.Connected
-                    ? new ConnectionValidationResult(true, $"TCP-соединение установлено ({host}:{port})")
-                    : new ConnectionValidationResult(false, $"Нет связи с {host}:{port}");
-            }
-            catch (Exception ex)
-            {
-                return new ConnectionValidationResult(false, $"TCP ошибка: {ex.Message}");
-            }
-        }
-
-        var hasAnyValue = connection.Values.Any(x => !string.IsNullOrWhiteSpace(x));
-        return hasAnyValue
-            ? new ConnectionValidationResult(true, "Параметры подключения заполнены")
-            : new ConnectionValidationResult(false, "Заполните параметры подключения");
-    }
-
-    private void AddColumnIfMissing(SqliteConnection connection, string table, string column, string definition)
-    {
-        var cmd = connection.CreateCommand();
-        cmd.CommandText = $"PRAGMA table_info({table});";
-        using var reader = cmd.ExecuteReader();
-        while (reader.Read())
-        {
-            if (string.Equals(reader.GetString(1), column, StringComparison.OrdinalIgnoreCase))
-            {
-                return;
-            }
-        }
-
-        var alter = connection.CreateCommand();
-        alter.CommandText = $"ALTER TABLE {table} ADD COLUMN {column} {definition};";
-        alter.ExecuteNonQuery();
-    }
-
-    private void ValidateRulePayload(SqliteConnection connection, int sourceDeviceId, string actionType, int? actionSceneId, int? actionDeviceId, bool? actionTargetIsOn)
-    {
-        EnsureDevicesExist(connection, new[] { sourceDeviceId });
-        if (string.Equals(actionType, "scene", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!actionSceneId.HasValue)
-            {
-                throw new ValidationProblemException("Для actionType=scene требуется actionSceneId", "RULE_ACTION_SCENE_REQUIRED");
-            }
-            _ = GetScene(actionSceneId.Value);
-            return;
-        }
-
-        if (string.Equals(actionType, "device", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!actionDeviceId.HasValue || !actionTargetIsOn.HasValue)
-            {
-                throw new ValidationProblemException("Для actionType=device требуются actionDeviceId и actionTargetIsOn", "RULE_ACTION_DEVICE_REQUIRED");
-            }
-            EnsureDevicesExist(connection, new[] { actionDeviceId.Value });
-            return;
-        }
-
-        throw new ValidationProblemException("actionType должен быть scene или device", "RULE_ACTION_INVALID");
-    }
-
-    private void ValidateSchedulePayload(SqliteConnection connection, string actionType, int? actionSceneId, int? actionDeviceId, bool? actionTargetIsOn, string timeOfDay)
-    {
-        _ = TimeOnly.ParseExact(timeOfDay, "HH:mm", CultureInfo.InvariantCulture);
-        if (string.Equals(actionType, "scene", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!actionSceneId.HasValue)
-            {
-                throw new ValidationProblemException("Для actionType=scene требуется actionSceneId", "SCHEDULE_ACTION_SCENE_REQUIRED");
-            }
-            _ = GetScene(actionSceneId.Value);
-            return;
-        }
-
-        if (string.Equals(actionType, "device", StringComparison.OrdinalIgnoreCase))
-        {
-            if (!actionDeviceId.HasValue || !actionTargetIsOn.HasValue)
-            {
-                throw new ValidationProblemException("Для actionType=device требуются actionDeviceId и actionTargetIsOn", "SCHEDULE_ACTION_DEVICE_REQUIRED");
-            }
-            EnsureDevicesExist(connection, new[] { actionDeviceId.Value });
-            return;
-        }
-
-        throw new ValidationProblemException("actionType должен быть scene или device", "SCHEDULE_ACTION_INVALID");
-    }
-
-    private string ExecuteAction(string actionType, int? actionSceneId, int? actionDeviceId, bool? actionTargetIsOn)
-    {
-        if (string.Equals(actionType, "scene", StringComparison.OrdinalIgnoreCase) && actionSceneId.HasValue)
-        {
-            var run = RunScene(actionSceneId.Value);
-            return $"Запущен сценарий #{actionSceneId.Value} ({run.Status})";
-        }
-
-        if (string.Equals(actionType, "device", StringComparison.OrdinalIgnoreCase) && actionDeviceId.HasValue && actionTargetIsOn.HasValue)
-        {
-            using var db = OpenConnection();
-            using var tx = db.BeginTransaction();
-            var cmd = db.CreateCommand();
-            cmd.Transaction = tx;
-            cmd.CommandText = "UPDATE Devices SET IsOn = @isOn, UpdatedAt = @updatedAt WHERE Id = @id;";
-            cmd.Parameters.AddWithValue("@isOn", actionTargetIsOn.Value ? 1 : 0);
-            cmd.Parameters.AddWithValue("@updatedAt", DateTime.UtcNow.ToString("O"));
-            cmd.Parameters.AddWithValue("@id", actionDeviceId.Value);
-            if (cmd.ExecuteNonQuery() == 0)
-            {
-                throw new NotFoundProblemException("Устройство не найдено", "DEVICE_NOT_FOUND");
-            }
-            LogEvent(db, tx, "info", "automation", "DEVICE_ACTION_EXECUTED", $"Устройство #{actionDeviceId.Value} установлено в {(actionTargetIsOn.Value ? "ON" : "OFF")}", deviceId: actionDeviceId.Value);
-            tx.Commit();
-            SyncLegacyDevicesJson(db);
-            return $"Устройство #{actionDeviceId.Value} -> {(actionTargetIsOn.Value ? "ON" : "OFF")}";
-        }
-
-        throw new ValidationProblemException("Некорректная конфигурация действия", "AUTOMATION_ACTION_INVALID");
-    }
-
-    private static bool IsRuleMatch(string op, string expectedRaw, string actualRaw)
-    {
-        var expected = expectedRaw.Trim();
-        var actual = actualRaw.Trim();
-        var cleanOp = NormalizeOptional(op, "eq").ToLowerInvariant();
-
-        if (double.TryParse(expected, NumberStyles.Any, CultureInfo.InvariantCulture, out var expectedNumber)
-            && double.TryParse(actual, NumberStyles.Any, CultureInfo.InvariantCulture, out var actualNumber))
-        {
-            return cleanOp switch
-            {
-                "gt" => actualNumber > expectedNumber,
-                "gte" => actualNumber >= expectedNumber,
-                "lt" => actualNumber < expectedNumber,
-                "lte" => actualNumber <= expectedNumber,
-                "neq" => Math.Abs(actualNumber - expectedNumber) > 0.0001,
-                _ => Math.Abs(actualNumber - expectedNumber) < 0.0001,
-            };
-        }
-
-        return cleanOp switch
-        {
-            "contains" => actual.Contains(expected, StringComparison.OrdinalIgnoreCase),
-            "neq" => !string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase),
-            _ => string.Equals(actual, expected, StringComparison.OrdinalIgnoreCase),
-        };
-    }
-
-    private static bool IsScheduleDue(ScheduleEntry schedule, DateTime utcNow)
-    {
-        var days = schedule.DaysOfWeek.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        var dayIndex = ((int)utcNow.DayOfWeek + 6) % 7 + 1;
-        if (days.Length > 0 && !days.Contains(dayIndex.ToString(CultureInfo.InvariantCulture)))
-        {
-            return false;
-        }
-
-        var time = TimeOnly.ParseExact(schedule.TimeOfDay, "HH:mm", CultureInfo.InvariantCulture);
-        if (utcNow.Hour != time.Hour || utcNow.Minute != time.Minute)
-        {
-            return false;
-        }
-
-        if (!schedule.LastRunAt.HasValue)
-        {
-            return true;
-        }
-
-        return schedule.LastRunAt.Value.Date < utcNow.Date || schedule.LastRunAt.Value.Hour != utcNow.Hour || schedule.LastRunAt.Value.Minute != utcNow.Minute;
-    }
-
     private static string InferDeviceType(string? name)
     {
         var lowered = (name ?? string.Empty).Trim().ToLowerInvariant();
@@ -1859,11 +1337,13 @@ VALUES (@ts, @severity, @source, @eventType, @message, @userId, @deviceId, @room
         public bool IsOn { get; set; }
         public string Type { get; set; } = "Другое";
         public string Provider { get; set; } = "mock";
+        public string Protocol { get; set; } = "manual";
+        public string Channel { get; set; } = "local";
+        public string ExternalId { get; set; } = string.Empty;
+        public string Manufacturer { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
         public Dictionary<string, string>? Connection { get; set; }
     }
 }
 
 public sealed record SceneActionInput(int DeviceId, bool TargetIsOn, int SortOrder);
-public sealed record ConnectionValidationResult(bool Ok, string Message);
-public sealed record RuleEventResult(int CheckedRules, int TriggeredRules, string Message);
-public sealed record ScheduleRunResult(int CheckedSchedules, int StartedSchedules, string Message);

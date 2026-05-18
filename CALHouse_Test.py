@@ -4,7 +4,18 @@ from datetime import datetime
 from typing import Any
 
 API_BASE = "http://localhost:5000"
-DEVICE_TYPES = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Другое"]
+DEFAULT_DEVICE_TYPES = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Замок", "Штора", "Другое"]
+DEFAULT_RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains"]
+DEFAULT_ACTION_KINDS = ["device_state", "scene_run"]
+DEFAULT_SCHEDULE_DAYS = [
+    {"value": 1, "title": "Пн"},
+    {"value": 2, "title": "Вт"},
+    {"value": 3, "title": "Ср"},
+    {"value": 4, "title": "Чт"},
+    {"value": 5, "title": "Пт"},
+    {"value": 6, "title": "Сб"},
+    {"value": 7, "title": "Вс"},
+]
 
 
 def fmt_dt(value: str | None) -> str:
@@ -18,26 +29,22 @@ def fmt_dt(value: str | None) -> str:
 
 def main(page: ft.Page):
     page.title = "CALHouse / Smart Home"
-    page.window_width = 1280
-    page.window_height = 860
-    page.window_min_width = 1080
-    page.window_min_height = 720
+    page.window_width = 1400
+    page.window_height = 900
+    page.window_min_width = 1180
+    page.window_min_height = 760
     page.padding = 0
     page.spacing = 0
     page.theme_mode = ft.ThemeMode.LIGHT
 
-    state = {
-        "tab": 0,
-        "dark": False,
-    }
-    data: dict[str, list[dict[str, Any]]] = {
+    state = {"tab": 0, "dark": False}
+    data: dict[str, Any] = {
+        "catalog": {},
         "devices": [],
         "rooms": [],
         "scenes": [],
         "rules": [],
-        "rule_triggers": [],
         "schedules": [],
-        "schedule_runs": [],
         "logs": [],
     }
 
@@ -54,8 +61,6 @@ def main(page: ft.Page):
                 "field": "#0f172a",
                 "nav": "#111827",
                 "accent": "#2563eb",
-                "danger": "#dc2626",
-                "success": "#16a34a",
             }
         return {
             "bg": "#f3f4f6",
@@ -66,8 +71,6 @@ def main(page: ft.Page):
             "field": "#eef2f7",
             "nav": "#ffffff",
             "accent": "#2563eb",
-            "danger": "#dc2626",
-            "success": "#16a34a",
         }
 
     def c(name: str) -> str:
@@ -100,11 +103,7 @@ def main(page: ft.Page):
         )
 
     def dropdown(**kwargs):
-        return ft.Dropdown(
-            bgcolor=c("field"),
-            border_color=c("border"),
-            **kwargs,
-        )
+        return ft.Dropdown(bgcolor=c("field"), border_color=c("border"), **kwargs)
 
     def show_message(text: str):
         page.snack_bar = ft.SnackBar(ft.Text(text))
@@ -139,6 +138,14 @@ def main(page: ft.Page):
         except requests.RequestException as ex:
             raise RuntimeError(f"API недоступен: {ex}") from ex
 
+    def load_catalog(show_error: bool = False):
+        try:
+            data["catalog"] = api_request("get", "/api/device-catalog") or {}
+        except Exception as ex:
+            data["catalog"] = {}
+            if show_error:
+                show_message(str(ex))
+
     def load_devices(show_error: bool = False):
         try:
             items = api_request("get", "/api/devices") or []
@@ -163,31 +170,32 @@ def main(page: ft.Page):
             if show_error:
                 show_message(str(ex))
 
-    def load_logs(show_error: bool = False):
-        try:
-            items = api_request("get", "/api/logs?limit=50") or []
-            data["logs"] = items if isinstance(items, list) else []
-        except Exception as ex:
-            if show_error:
-                show_message(str(ex))
-
     def load_rules(show_error: bool = False):
         try:
-            data["rules"] = api_request("get", "/api/rules") or []
-            data["rule_triggers"] = api_request("get", "/api/rules/triggers?limit=30") or []
+            items = api_request("get", "/api/rules") or []
+            data["rules"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
     def load_schedules(show_error: bool = False):
         try:
-            data["schedules"] = api_request("get", "/api/schedules") or []
-            data["schedule_runs"] = api_request("get", "/api/schedules/runs?limit=30") or []
+            items = api_request("get", "/api/schedules") or []
+            data["schedules"] = items if isinstance(items, list) else []
+        except Exception as ex:
+            if show_error:
+                show_message(str(ex))
+
+    def load_logs(show_error: bool = False):
+        try:
+            items = api_request("get", "/api/logs?limit=80") or []
+            data["logs"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
     def refresh_all(show_toast: bool = False):
+        load_catalog(show_error=True)
         load_rooms(show_error=True)
         load_devices(show_error=True)
         load_scenes(show_error=True)
@@ -197,8 +205,36 @@ def main(page: ft.Page):
         if show_toast:
             show_message("Данные обновлены")
 
+    def device_types() -> list[str]:
+        return data["catalog"].get("deviceTypes") or DEFAULT_DEVICE_TYPES
+
+    def providers() -> list[dict[str, Any]]:
+        items = data["catalog"].get("providers") or []
+        return items if isinstance(items, list) else []
+
+    def provider_map() -> dict[str, dict[str, Any]]:
+        return {str(item.get("key", "")): item for item in providers()}
+
+    def rule_operators() -> list[str]:
+        return data["catalog"].get("ruleOperators") or DEFAULT_RULE_OPERATORS
+
+    def action_kinds() -> list[str]:
+        return data["catalog"].get("actionKinds") or DEFAULT_ACTION_KINDS
+
+    def schedule_days() -> list[dict[str, Any]]:
+        return data["catalog"].get("scheduleDays") or DEFAULT_SCHEDULE_DAYS
+
     def room_options() -> list[ft.dropdown.Option]:
         return [ft.dropdown.Option(str(room["id"]), room["name"]) for room in data["rooms"]]
+
+    def device_options(sensor_first: bool = False) -> list[ft.dropdown.Option]:
+        items = data["devices"]
+        if sensor_first:
+            items = sorted(items, key=lambda item: (0 if item.get("type") == "Датчик" else 1, str(item.get("name", ""))))
+        return [ft.dropdown.Option(str(device["id"]), device["name"]) for device in items]
+
+    def scene_options() -> list[ft.dropdown.Option]:
+        return [ft.dropdown.Option(str(scene["id"]), scene["name"]) for scene in data["scenes"]]
 
     def find_room_name(room_id: int | None) -> str:
         for room in data["rooms"]:
@@ -206,8 +242,26 @@ def main(page: ft.Page):
                 return str(room.get("name", "Комната"))
         return "Комната не указана"
 
+    def provider_title(key: str | None) -> str:
+        if not key:
+            return "—"
+        item = provider_map().get(key)
+        return str(item.get("title", key)) if item else str(key)
+
+    def action_kind_title(kind: str | None) -> str:
+        if kind == "device_state":
+            return "Изменить устройство"
+        if kind == "scene_run":
+            return "Запустить сценарий"
+        return str(kind or "—")
+
+    def schedule_days_title(days: list[int] | None) -> str:
+        days = days or []
+        lookup = {int(item["value"]): str(item["title"]) for item in schedule_days()}
+        return ", ".join(lookup.get(day, str(day)) for day in days) or "—"
+
     def stat_card(title: str, value: str, icon: str, tab_index: int | None = None):
-        box = ft.Container(
+        return ft.Container(
             expand=True,
             padding=16,
             bgcolor=c("card"),
@@ -222,7 +276,6 @@ def main(page: ft.Page):
             ),
             on_click=(lambda e: switch_tab(tab_index)) if tab_index is not None else None,
         )
-        return box
 
     def switch_tab(index: int):
         state["tab"] = index
@@ -249,57 +302,169 @@ def main(page: ft.Page):
         dialog_ref = dialog
         show_dialog(dialog)
 
-    def open_device_dialog():
-        name_tf = field(label="Название", hint_text="Например: Лампа IKEA")
-        identifier_tf = field(label="Идентификатор", hint_text="Например: zigbee-lamp-01")
-        room_tf = field(label="Комната", hint_text="Например: Спальня")
-        provider_dd = dropdown(
-            label="Провайдер",
-            value="mock",
-            options=[ft.dropdown.Option("mock"), ft.dropdown.Option("http"), ft.dropdown.Option("tcp"), ft.dropdown.Option("mqtt")],
+    def status_chip(text: str, status: str | None):
+        mapping = {
+            "connected": ("#dcfce7", "#166534"),
+            "completed": ("#dcfce7", "#166534"),
+            "enabled": ("#dbeafe", "#1d4ed8"),
+            "no_connection": ("#fee2e2", "#991b1b"),
+            "warning": ("#fef3c7", "#92400e"),
+            "disabled": ("#e2e8f0", "#475569"),
+            "unknown": ("#e2e8f0", "#475569"),
+        }
+        bg, fg = mapping.get(str(status or "unknown"), ("#e2e8f0", "#475569"))
+        return ft.Container(
+            padding=ft.padding.symmetric(horizontal=12, vertical=6),
+            border_radius=999,
+            bgcolor=bg,
+            content=ft.Text(text, color=fg, weight=ft.FontWeight.W_600, size=12),
         )
-        endpoint_tf = field(label="Endpoint/URL", hint_text="Для http: url, для tcp/mqtt: host:port")
-        type_dd = dropdown(
-            label="Тип устройства",
-            value=DEVICE_TYPES[0],
-            options=[ft.dropdown.Option(x) for x in DEVICE_TYPES],
-        )
-        is_on_sw = ft.Switch(label="Включить сразу", value=False)
+
+    def bool_chip(value: bool):
+        return status_chip("Включено" if value else "Выключено", "connected" if value else "disabled")
+
+    def open_device_dialog(device: dict[str, Any] | None = None):
+        editing = device is not None
+        providers_dict = provider_map()
+        provider_key = str((device or {}).get("provider", "mock") or "mock")
+        provider_info = providers_dict.get(provider_key, {"protocol": "manual", "channel": "local", "note": ""})
+
+        name_tf = field(label="Название", value=(device or {}).get("name", ""), hint_text="Например: Лампа IKEA")
+        external_id_tf = field(label="Идентификатор", value=(device or {}).get("externalId", ""), hint_text="Например: kitchen-light-01")
+        manufacturer_tf = field(label="Производитель", value=(device or {}).get("manufacturer", ""))
+        model_tf = field(label="Модель", value=(device or {}).get("model", ""))
+        type_dd = dropdown(label="Тип устройства", value=(device or {}).get("type", device_types()[0]), options=[ft.dropdown.Option(x) for x in device_types()])
+        provider_dd = dropdown(label="Провайдер", value=provider_key, options=[ft.dropdown.Option(item.get("key"), item.get("title")) for item in providers()])
+        protocol_tf = field(label="Протокол", value=str((device or {}).get("protocol", provider_info.get("protocol", "manual"))))
+        channel_tf = field(label="Канал", value=str((device or {}).get("channel", provider_info.get("channel", "local"))))
+        room_dd = dropdown(label="Комната из списка", value=str(device.get("roomId")) if editing and device.get("roomId") is not None else None, options=room_options())
+        new_room_tf = field(label="Или новая комната", value="" if editing else (device or {}).get("room", ""), hint_text="Оставь пустым, если выбрал комнату выше")
+        is_on_sw = ft.Switch(label="Включить сразу", value=bool((device or {}).get("isOn", False)))
+
+        existing_conn = (device or {}).get("connection", {}) or {}
+        host_tf = field(label="Host / IP", value=existing_conn.get("host", ""))
+        port_tf = field(label="Port", value=str(existing_conn.get("port", "")))
+        url_tf = field(label="URL", value=existing_conn.get("url", ""))
+        path_tf = field(label="Path", value=existing_conn.get("path", ""))
+        topic_tf = field(label="Topic / Entity ID", value=existing_conn.get("topic", existing_conn.get("entity_id", "")))
+        username_tf = field(label="Username", value=existing_conn.get("username", ""))
+        password_tf = field(label="Password / Device key", value=existing_conn.get("password", existing_conn.get("device_key", "")), password=True, can_reveal_password=True)
+        token_tf = field(label="Token", value=existing_conn.get("token", ""), password=True, can_reveal_password=True)
+        note_text = TM(str(provider_info.get("note", "")), size=12)
+        test_result = TM("", size=12)
+
+        def collect_connection() -> dict[str, str]:
+            connection = {}
+            pairs = {
+                "host": host_tf.value,
+                "port": port_tf.value,
+                "url": url_tf.value,
+                "path": path_tf.value,
+                "topic": topic_tf.value,
+                "entity_id": topic_tf.value if provider_dd.value == "homeassistant" else "",
+                "username": username_tf.value,
+                "password": password_tf.value,
+                "device_key": password_tf.value,
+                "token": token_tf.value,
+            }
+            for key, value in pairs.items():
+                clean = (value or "").strip()
+                if clean:
+                    connection[key] = clean
+            return connection
+
+        def on_provider_change(_):
+            info = providers_dict.get(str(provider_dd.value), {})
+            if not protocol_tf.value:
+                protocol_tf.value = str(info.get("protocol", "manual"))
+            if not channel_tf.value:
+                channel_tf.value = str(info.get("channel", "local"))
+            note_text.value = str(info.get("note", ""))
+            page.update()
+
+        provider_dd.on_change = on_provider_change
+
+        def test_connection(_):
+            try:
+                result = api_request(
+                    "post",
+                    "/api/devices/validate-connection",
+                    {
+                        "provider": provider_dd.value or "mock",
+                        "protocol": (protocol_tf.value or "manual").strip(),
+                        "connection": collect_connection(),
+                    },
+                ) or {}
+                status = str(result.get("status", "unknown"))
+                test_result.value = f"Проверка: {result.get('message', 'готово')}"
+                if status == "connected":
+                    show_message("Связь проверена: подключено")
+                elif status == "no_connection":
+                    show_message("Связь проверена: нет связи")
+                else:
+                    show_message(str(result.get("message", "Проверка завершена")))
+                page.update()
+            except Exception as ex:
+                show_message(str(ex))
 
         def save(_):
             try:
-                connection: dict[str, Any] = {}
-                endpoint = (endpoint_tf.value or "").strip()
-                if provider_dd.value == "http" and endpoint:
-                    connection["url"] = endpoint
-                elif provider_dd.value in ("tcp", "mqtt") and endpoint:
-                    if ":" in endpoint:
-                        host, port = endpoint.split(":", 1)
-                        connection["host"] = host.strip()
-                        connection["port"] = port.strip()
-                validate = api_request("post", "/api/devices/validate-connection", {"provider": provider_dd.value, "connection": connection})
                 payload = {
                     "name": (name_tf.value or "").strip(),
-                    "identifier": (identifier_tf.value or "").strip() or None,
-                    "room": (room_tf.value or "").strip(),
+                    "roomId": int(room_dd.value) if room_dd.value else None,
+                    "room": (new_room_tf.value or "").strip() or None,
                     "isOn": bool(is_on_sw.value),
                     "type": type_dd.value or "Другое",
                     "provider": provider_dd.value or "mock",
-                    "connection": connection,
+                    "protocol": (protocol_tf.value or "manual").strip(),
+                    "channel": (channel_tf.value or "local").strip(),
+                    "externalId": (external_id_tf.value or "").strip(),
+                    "manufacturer": (manufacturer_tf.value or "").strip(),
+                    "model": (model_tf.value or "").strip(),
+                    "connection": collect_connection(),
                 }
-                api_request("post", "/api/devices", payload)
+                if editing:
+                    created = api_request("put", f"/api/devices/{device['id']}", payload)
+                    message = "Устройство обновлено"
+                else:
+                    created = api_request("post", "/api/devices", payload)
+                    message = "Устройство добавлено"
                 close_dialog(dialog)
                 refresh_all()
                 build()
-                show_message(f"Устройство добавлено ({'подключено' if validate and validate.get('ok') else 'нет связи'})")
+                status = created.get("connectionStatus") if isinstance(created, dict) else None
+                status_message = created.get("connectionMessage") if isinstance(created, dict) else ""
+                show_message(f"{message}. Статус: {status or 'unknown'} {status_message or ''}".strip())
             except Exception as ex:
                 show_message(str(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
-            title=T("Добавить устройство", weight=ft.FontWeight.BOLD),
-            content=ft.Column(tight=True, spacing=10, controls=[name_tf, identifier_tf, room_tf, provider_dd, endpoint_tf, type_dd, is_on_sw]),
+            title=T("Изменить устройство" if editing else "Добавить устройство", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                width=860,
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[
+                        ft.Row(spacing=10, controls=[name_tf, external_id_tf]),
+                        ft.Row(spacing=10, controls=[manufacturer_tf, model_tf]),
+                        ft.Row(spacing=10, controls=[type_dd, provider_dd]),
+                        ft.Row(spacing=10, controls=[protocol_tf, channel_tf]),
+                        ft.Row(spacing=10, controls=[room_dd, new_room_tf]),
+                        is_on_sw,
+                        T("Параметры подключения", weight=ft.FontWeight.BOLD),
+                        note_text,
+                        ft.Row(spacing=10, controls=[host_tf, port_tf]),
+                        ft.Row(spacing=10, controls=[url_tf, path_tf]),
+                        ft.Row(spacing=10, controls=[topic_tf, username_tf]),
+                        ft.Row(spacing=10, controls=[password_tf, token_tf]),
+                        test_result,
+                    ],
+                ),
+            ),
             actions=[
+                ft.TextButton("Тест связи", on_click=test_connection),
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
                 ft.ElevatedButton("Сохранить", on_click=save),
             ],
@@ -390,13 +555,7 @@ def main(page: ft.Page):
                 existing_actions[action.get("deviceId")] = "on" if action.get("targetIsOn") else "off"
 
         name_tf = field(label="Название сценария", value=(scene or {}).get("name", ""))
-        description_tf = field(
-            label="Описание",
-            multiline=True,
-            min_lines=2,
-            max_lines=4,
-            value=(scene or {}).get("description", ""),
-        )
+        description_tf = field(label="Описание", multiline=True, min_lines=2, max_lines=4, value=(scene or {}).get("description", ""))
 
         device_controls: list[tuple[dict[str, Any], ft.Dropdown]] = []
         action_rows: list[ft.Control] = []
@@ -431,23 +590,13 @@ def main(page: ft.Page):
         def save(_):
             actions = []
             order = 1
-            for device, dd in device_controls:
+            for item_device, dd in device_controls:
                 if dd.value == "skip":
                     continue
-                actions.append(
-                    {
-                        "deviceId": int(device.get("id", 0)),
-                        "targetIsOn": dd.value == "on",
-                        "sortOrder": order,
-                    }
-                )
+                actions.append({"deviceId": int(item_device.get("id", 0)), "targetIsOn": dd.value == "on", "sortOrder": order})
                 order += 1
             try:
-                payload = {
-                    "name": (name_tf.value or "").strip(),
-                    "description": (description_tf.value or "").strip(),
-                    "actions": actions,
-                }
+                payload = {"name": (name_tf.value or "").strip(), "description": (description_tf.value or "").strip(), "actions": actions}
                 if editing:
                     api_request("put", f"/api/scenes/{scene['id']}", payload)
                     message = "Сценарий обновлен"
@@ -473,10 +622,7 @@ def main(page: ft.Page):
                         name_tf,
                         description_tf,
                         T("Действия сценария", weight=ft.FontWeight.BOLD),
-                        ft.Container(
-                            height=320,
-                            content=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=8, controls=action_rows),
-                        ),
+                        ft.Container(height=320, content=ft.Column(scroll=ft.ScrollMode.AUTO, spacing=8, controls=action_rows)),
                     ],
                 ),
             ),
@@ -508,23 +654,251 @@ def main(page: ft.Page):
 
         confirm_action("Удалить сценарий", f"Удалить сценарий «{scene_name}»?", action)
 
+    def open_rule_dialog(rule: dict[str, Any] | None = None):
+        editing = rule is not None
+        name_tf = field(label="Название правила", value=(rule or {}).get("name", ""))
+        description_tf = field(label="Описание", value=(rule or {}).get("description", ""), multiline=True, min_lines=2, max_lines=3)
+        enabled_sw = ft.Switch(label="Правило активно", value=bool((rule or {}).get("isEnabled", True)))
+        trigger_device_dd = dropdown(label="Датчик / источник", value=str(rule.get("triggerDeviceId")) if editing and rule.get("triggerDeviceId") is not None else None, options=device_options(sensor_first=True))
+        event_type_tf = field(label="Тип события", value=(rule or {}).get("triggerEventType", "motion"), hint_text="Например: motion, temperature, state")
+        operator_dd = dropdown(label="Оператор", value=(rule or {}).get("comparisonOperator", "="), options=[ft.dropdown.Option(x) for x in rule_operators()])
+        compare_tf = field(label="Сравнить с", value=(rule or {}).get("compareValue", "true"), hint_text="Например: true, 25, open")
+        action_kind_dd = dropdown(label="Тип действия", value=(rule or {}).get("actionKind", "device_state"), options=[ft.dropdown.Option(x, action_kind_title(x)) for x in action_kinds()])
+        action_device_dd = dropdown(label="Целевое устройство", value=str(rule.get("actionDeviceId")) if editing and rule.get("actionDeviceId") is not None else None, options=device_options())
+        action_state_dd = dropdown(
+            label="Целевое состояние",
+            value="on" if (rule or {}).get("actionTargetIsOn", True) else "off",
+            options=[ft.dropdown.Option("on", "Включить"), ft.dropdown.Option("off", "Выключить")],
+        )
+        action_scene_dd = dropdown(label="Или сценарий", value=str(rule.get("actionSceneId")) if editing and rule.get("actionSceneId") is not None else None, options=scene_options())
+
+        def save(_):
+            try:
+                payload = {
+                    "name": (name_tf.value or "").strip(),
+                    "description": (description_tf.value or "").strip(),
+                    "isEnabled": bool(enabled_sw.value),
+                    "triggerDeviceId": int(trigger_device_dd.value or 0),
+                    "eventType": (event_type_tf.value or "").strip(),
+                    "comparisonOperator": operator_dd.value or "=",
+                    "compareValue": (compare_tf.value or "").strip(),
+                    "actionKind": action_kind_dd.value or "device_state",
+                    "actionDeviceId": int(action_device_dd.value) if action_device_dd.value else None,
+                    "actionTargetIsOn": True if action_state_dd.value == "on" else False,
+                    "actionSceneId": int(action_scene_dd.value) if action_scene_dd.value else None,
+                }
+                if editing:
+                    api_request("put", f"/api/rules/{rule['id']}", payload)
+                    message = "Правило обновлено"
+                else:
+                    api_request("post", "/api/rules", payload)
+                    message = "Правило создано"
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                show_message(message)
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Изменить правило" if editing else "Создать правило", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                width=760,
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[
+                        name_tf,
+                        description_tf,
+                        enabled_sw,
+                        ft.Row(spacing=10, controls=[trigger_device_dd, event_type_tf]),
+                        ft.Row(spacing=10, controls=[operator_dd, compare_tf]),
+                        ft.Row(spacing=10, controls=[action_kind_dd, action_state_dd]),
+                        ft.Row(spacing=10, controls=[action_device_dd, action_scene_dd]),
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Сохранить", on_click=save),
+            ],
+        )
+        show_dialog(dialog)
+
+    def delete_rule(rule_id: int, rule_name: str):
+        def action():
+            try:
+                api_request("delete", f"/api/rules/{rule_id}")
+                refresh_all()
+                build()
+                show_message(f"Правило удалено: {rule_name}")
+            except Exception as ex:
+                show_message(str(ex))
+
+        confirm_action("Удалить правило", f"Удалить правило «{rule_name}»?", action)
+
+    def set_rule_enabled(rule_id: int, is_enabled: bool):
+        try:
+            api_request("put", f"/api/rules/{rule_id}/enabled", {"isEnabled": is_enabled})
+            refresh_all()
+            build()
+            show_message("Состояние правила обновлено")
+        except Exception as ex:
+            show_message(str(ex))
+
+    def open_schedule_dialog(schedule: dict[str, Any] | None = None):
+        editing = schedule is not None
+        name_tf = field(label="Название расписания", value=(schedule or {}).get("name", ""))
+        description_tf = field(label="Описание", value=(schedule or {}).get("description", ""), multiline=True, min_lines=2, max_lines=3)
+        time_tf = field(label="Время HH:mm", value=(schedule or {}).get("timeOfDay", "08:00"))
+        enabled_sw = ft.Switch(label="Расписание активно", value=bool((schedule or {}).get("isEnabled", True)))
+        action_kind_dd = dropdown(label="Тип действия", value=(schedule or {}).get("actionKind", "device_state"), options=[ft.dropdown.Option(x, action_kind_title(x)) for x in action_kinds()])
+        action_device_dd = dropdown(label="Целевое устройство", value=str(schedule.get("actionDeviceId")) if editing and schedule.get("actionDeviceId") is not None else None, options=device_options())
+        action_state_dd = dropdown(
+            label="Целевое состояние",
+            value="on" if (schedule or {}).get("actionTargetIsOn", True) else "off",
+            options=[ft.dropdown.Option("on", "Включить"), ft.dropdown.Option("off", "Выключить")],
+        )
+        action_scene_dd = dropdown(label="Или сценарий", value=str(schedule.get("actionSceneId")) if editing and schedule.get("actionSceneId") is not None else None, options=scene_options())
+
+        selected_days = set((schedule or {}).get("daysOfWeek", [1, 2, 3, 4, 5]))
+        day_boxes: list[tuple[int, ft.Checkbox]] = []
+        for item in schedule_days():
+            box = ft.Checkbox(label=str(item.get("title")), value=int(item.get("value")) in selected_days)
+            day_boxes.append((int(item.get("value")), box))
+
+        def save(_):
+            try:
+                payload = {
+                    "name": (name_tf.value or "").strip(),
+                    "description": (description_tf.value or "").strip(),
+                    "isEnabled": bool(enabled_sw.value),
+                    "timeOfDay": (time_tf.value or "").strip(),
+                    "daysOfWeek": [value for value, box in day_boxes if box.value],
+                    "actionKind": action_kind_dd.value or "device_state",
+                    "actionDeviceId": int(action_device_dd.value) if action_device_dd.value else None,
+                    "actionTargetIsOn": True if action_state_dd.value == "on" else False,
+                    "actionSceneId": int(action_scene_dd.value) if action_scene_dd.value else None,
+                }
+                if editing:
+                    api_request("put", f"/api/schedules/{schedule['id']}", payload)
+                    message = "Расписание обновлено"
+                else:
+                    api_request("post", "/api/schedules", payload)
+                    message = "Расписание создано"
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                show_message(message)
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Изменить расписание" if editing else "Создать расписание", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                width=760,
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[
+                        name_tf,
+                        description_tf,
+                        ft.Row(spacing=10, controls=[time_tf, enabled_sw]),
+                        T("Дни недели", weight=ft.FontWeight.BOLD),
+                        ft.Row(spacing=8, controls=[box for _, box in day_boxes]),
+                        ft.Row(spacing=10, controls=[action_kind_dd, action_state_dd]),
+                        ft.Row(spacing=10, controls=[action_device_dd, action_scene_dd]),
+                    ],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Сохранить", on_click=save),
+            ],
+        )
+        show_dialog(dialog)
+
+    def delete_schedule(schedule_id: int, schedule_name: str):
+        def action():
+            try:
+                api_request("delete", f"/api/schedules/{schedule_id}")
+                refresh_all()
+                build()
+                show_message(f"Расписание удалено: {schedule_name}")
+            except Exception as ex:
+                show_message(str(ex))
+
+        confirm_action("Удалить расписание", f"Удалить расписание «{schedule_name}»?", action)
+
+    def set_schedule_enabled(schedule_id: int, is_enabled: bool):
+        try:
+            api_request("put", f"/api/schedules/{schedule_id}/enabled", {"isEnabled": is_enabled})
+            refresh_all()
+            build()
+            show_message("Состояние расписания обновлено")
+        except Exception as ex:
+            show_message(str(ex))
+
+    def run_due_schedules():
+        try:
+            result = api_request("post", "/api/schedules/run-due") or {}
+            refresh_all()
+            build()
+            show_message(str(result.get("message", "Проверка расписаний выполнена")))
+        except Exception as ex:
+            show_message(str(ex))
+
+    def open_event_dialog():
+        source_device_dd = dropdown(label="Источник события", options=device_options(sensor_first=True))
+        event_type_tf = field(label="Тип события", value="motion")
+        value_tf = field(label="Значение", value="true")
+        message_tf = field(label="Сообщение", value="Тестовое событие")
+
+        def send_event(_):
+            try:
+                result = api_request(
+                    "post",
+                    "/api/events",
+                    {
+                        "deviceId": int(source_device_dd.value or 0),
+                        "eventType": (event_type_tf.value or "").strip(),
+                        "value": (value_tf.value or "").strip(),
+                        "message": (message_tf.value or "").strip(),
+                    },
+                ) or {}
+                close_dialog(dialog)
+                refresh_all()
+                build()
+                count = len(result.get("triggeredRules", []) or [])
+                show_message(f"Событие отправлено. Сработало правил: {count}")
+            except Exception as ex:
+                show_message(str(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Отправить событие датчика", weight=ft.FontWeight.BOLD),
+            content=ft.Column(tight=True, spacing=10, controls=[source_device_dd, event_type_tf, value_tf, message_tf]),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Отправить", on_click=send_event),
+            ],
+        )
+        show_dialog(dialog)
+
     def home_view() -> ft.Control:
         recent_logs = data["logs"][:6]
         log_controls = [
             card(
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                    controls=[
-                        T(str(log.get("message", "Событие")), weight=ft.FontWeight.BOLD),
-                        TM(fmt_dt(log.get("ts")), size=12),
-                    ],
+                    controls=[T(str(log.get("message", "Событие")), weight=ft.FontWeight.BOLD), TM(fmt_dt(log.get("ts")), size=12)],
                 ),
                 TM(f"Источник: {log.get('source', 'api')} · Тип: {log.get('eventType', 'EVENT')}", size=12),
             )
             for log in recent_logs
-        ]
-        if not log_controls:
-            log_controls = [card(TM("История пока пустая"))]
+        ] or [card(TM("История пока пустая"))]
 
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
@@ -539,22 +913,14 @@ def main(page: ft.Page):
                         controls=[
                             T("CALHouse", size=26, weight=ft.FontWeight.BOLD, color="#ffffff"),
                             ft.Text(
-                                "Комнаты, привязка устройств и ручные сценарии теперь работают через backend и локальную SQLite БД.",
+                                "Устройства теперь можно подключать как реальные: с идентификатором, провайдером, протоколом, тестом связи, правилами и расписаниями.",
                                 color="#e0e7ff",
                             ),
                             ft.Row(
                                 spacing=10,
                                 controls=[
-                                    ft.ElevatedButton(
-                                        "Открыть комнаты",
-                                        icon=ft.Icons.MEETING_ROOM,
-                                        on_click=lambda e: switch_tab(2),
-                                    ),
-                                    ft.OutlinedButton(
-                                        "Открыть сценарии",
-                                        icon=ft.Icons.AUTO_AWESOME,
-                                        on_click=lambda e: switch_tab(3),
-                                    ),
+                                    ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()),
+                                    ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()),
                                 ],
                             ),
                         ],
@@ -568,6 +934,14 @@ def main(page: ft.Page):
                         stat_card("Сценарии", str(len(data["scenes"])), ft.Icons.AUTO_AWESOME, 3),
                     ],
                 ),
+                ft.Row(
+                    spacing=12,
+                    controls=[
+                        stat_card("Правила", str(len(data["rules"])), ft.Icons.RULE, 4),
+                        stat_card("Расписания", str(len(data["schedules"])), ft.Icons.SCHEDULE, 5),
+                        stat_card("Логи", str(len(data["logs"])), ft.Icons.HISTORY, 6),
+                    ],
+                ),
                 T("Последние события", size=18, weight=ft.FontWeight.BOLD),
                 *log_controls,
             ],
@@ -576,11 +950,7 @@ def main(page: ft.Page):
     def devices_view() -> ft.Control:
         device_cards = []
         for device in data["devices"]:
-            room_dd = dropdown(
-                value=str(device.get("roomId")) if device.get("roomId") is not None else None,
-                options=room_options(),
-                width=220,
-            )
+            room_dd = dropdown(value=str(device.get("roomId")) if device.get("roomId") is not None else None, options=room_options(), width=220)
             device_cards.append(
                 card(
                     ft.Row(
@@ -590,48 +960,35 @@ def main(page: ft.Page):
                                 spacing=4,
                                 controls=[
                                     T(str(device.get("name", "Устройство")), size=18, weight=ft.FontWeight.BOLD),
-                                    TM(f"Комната: {device.get('room', 'Комната не указана')}", size=12),
-                                    TM(f"Тип: {device.get('type', 'Другое')} · Provider: {device.get('provider', 'mock')}", size=12),
-                                    TM(f"ID: {device.get('identifier') or '—'} · Связь: {device.get('connectionStatus', 'unknown')}", size=12),
+                                    TM(f"ID: {device.get('externalId', '—')} · Комната: {device.get('room', 'Не указана')}", size=12),
+                                    TM(f"Тип: {device.get('type', 'Другое')} · {provider_title(device.get('provider'))}", size=12),
+                                    TM(f"Протокол: {device.get('protocol', 'manual')} · Канал: {device.get('channel', 'local')}", size=12),
+                                    TM(device.get("connectionMessage") or "", size=12),
                                 ],
                             ),
-                            ft.Container(
-                                padding=ft.padding.symmetric(horizontal=12, vertical=6),
-                                border_radius=999,
-                                bgcolor="#dcfce7" if device.get("isOn") else "#e2e8f0",
-                                content=ft.Text(
-                                    "Включено" if device.get("isOn") else "Выключено",
-                                    color="#166534" if device.get("isOn") else "#475569",
-                                    weight=ft.FontWeight.W_600,
-                                ),
+                            ft.Column(
+                                horizontal_alignment=ft.CrossAxisAlignment.END,
+                                controls=[
+                                    status_chip(str(device.get("connectionStatus", "unknown")), device.get("connectionStatus")),
+                                    bool_chip(bool(device.get("isOn"))),
+                                ],
                             ),
                         ],
                     ),
-                    TM(f"Обновлено: {fmt_dt(device.get('updatedAt'))}"),
+                    TM(f"Последняя проверка: {fmt_dt(device.get('lastConnectionCheckAt'))} · Последний сигнал: {fmt_dt(device.get('lastSeenAt'))}"),
                     ft.Row(
                         spacing=10,
                         controls=[
-                            ft.ElevatedButton(
-                                "Toggle",
-                                icon=ft.Icons.POWER_SETTINGS_NEW,
-                                on_click=lambda e, device_id=device["id"]: toggle_device(device_id),
-                            ),
-                            ft.OutlinedButton(
-                                "Удалить",
-                                icon=ft.Icons.DELETE_OUTLINE,
-                                on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство"))),
-                            ),
+                            ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=lambda e, device_id=device["id"]: toggle_device(device_id)),
+                            ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda e, d=device: open_device_dialog(d)),
+                            ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство")))),
                         ],
                     ),
                     ft.Row(
                         spacing=10,
                         controls=[
                             room_dd,
-                            ft.OutlinedButton(
-                                "Переместить",
-                                icon=ft.Icons.SWAP_HORIZ,
-                                on_click=lambda e, device_id=device["id"], dd=room_dd: move_device(int(device_id), dd.value),
-                            ),
+                            ft.OutlinedButton("Переместить", icon=ft.Icons.SWAP_HORIZ, on_click=lambda e, device_id=device["id"], dd=room_dd: move_device(int(device_id), dd.value)),
                         ],
                     ),
                 )
@@ -643,14 +1000,8 @@ def main(page: ft.Page):
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
-                        ft.Column(spacing=4, controls=[T("Устройства", size=22, weight=ft.FontWeight.BOLD), TM("CRUD устройств и изменение привязки к комнатам")]),
-                        ft.Row(
-                            spacing=10,
-                            controls=[
-                                ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()),
-                                ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
-                            ],
-                        ),
+                        ft.Column(spacing=4, controls=[T("Устройства", size=22, weight=ft.FontWeight.BOLD), TM("Подключение реальных устройств, тест связи и управление")]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
                     ],
                 ),
                 *(device_cards or [card(TM("Устройств пока нет"))]),
@@ -658,7 +1009,6 @@ def main(page: ft.Page):
         )
 
     def rooms_view() -> ft.Control:
-        room_cards = []
         devices_by_room: dict[int, list[dict[str, Any]]] = {}
         for device in data["devices"]:
             room_id = device.get("roomId")
@@ -666,29 +1016,16 @@ def main(page: ft.Page):
                 continue
             devices_by_room.setdefault(int(room_id), []).append(device)
 
+        room_cards = []
         for room in data["rooms"]:
             room_devices = devices_by_room.get(int(room["id"]), [])
-            device_lines = room_devices or []
             room_cards.append(
                 card(
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Column(
-                                spacing=4,
-                                controls=[
-                                    T(str(room.get("name", "Комната")), size=18, weight=ft.FontWeight.BOLD),
-                                    TM(f"Зона: {room.get('zone', '') or 'Не указана'}", size=12),
-                                    TM(f"Устройств: {room.get('deviceCount', 0)}", size=12),
-                                ],
-                            ),
-                            ft.Row(
-                                spacing=8,
-                                controls=[
-                                    ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, r=room: open_room_dialog(r)),
-                                    ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, r=room: delete_room(int(r["id"]), str(r.get("name", "Комната")))),
-                                ],
-                            ),
+                            ft.Column(spacing=4, controls=[T(str(room.get("name", "Комната")), size=18, weight=ft.FontWeight.BOLD), TM(f"Зона: {room.get('zone', '') or 'Не указана'}", size=12), TM(f"Устройств: {room.get('deviceCount', 0)}", size=12)]),
+                            ft.Row(spacing=8, controls=[ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, r=room: open_room_dialog(r)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, r=room: delete_room(int(r["id"]), str(r.get("name", "Комната"))))]),
                         ],
                     ),
                     T("Устройства в комнате", weight=ft.FontWeight.BOLD),
@@ -700,18 +1037,13 @@ def main(page: ft.Page):
                             content=ft.Row(
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                 controls=[
-                                    ft.Column(
-                                        spacing=2,
-                                        controls=[
-                                            T(str(device.get("name", "Устройство")), weight=ft.FontWeight.BOLD),
-                                            TM(f"Тип: {device.get('type', 'Другое')}", size=12),
-                                        ],
-                                    ),
-                                    TM("Вкл" if device.get("isOn") else "Выкл", size=12),
+                                    ft.Column(spacing=2, controls=[T(str(device.get("name", "Устройство")), weight=ft.FontWeight.BOLD), TM(f"Тип: {device.get('type', 'Другое')} · {device.get('externalId', '—')}", size=12)]),
+                                    status_chip(str(device.get("connectionStatus", "unknown")), device.get("connectionStatus")),
                                 ],
                             ),
-                        ) for device in device_lines
-                    ] if device_lines else [TM("В этой комнате пока нет устройств")]),
+                        )
+                        for device in room_devices
+                    ] if room_devices else [TM("В этой комнате пока нет устройств")]),
                 )
             )
 
@@ -722,14 +1054,8 @@ def main(page: ft.Page):
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
-                        ft.Column(spacing=4, controls=[T("Комнаты и зоны", size=22, weight=ft.FontWeight.BOLD), TM("CRUD комнат, зоны и группировка устройств")]),
-                        ft.Row(
-                            spacing=10,
-                            controls=[
-                                ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog()),
-                                ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
-                            ],
-                        ),
+                        ft.Column(spacing=4, controls=[T("Комнаты и зоны", size=22, weight=ft.FontWeight.BOLD), TM("CRUD комнат и группировка устройств")]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
                     ],
                 ),
                 *(room_cards or [card(TM("Комнат пока нет"))]),
@@ -745,20 +1071,8 @@ def main(page: ft.Page):
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Column(
-                                spacing=4,
-                                controls=[
-                                    T(str(scene.get("name", "Сценарий")), size=18, weight=ft.FontWeight.BOLD),
-                                    TM(str(scene.get("description", "")) or "Без описания", size=12),
-                                ],
-                            ),
-                            ft.Row(
-                                spacing=8,
-                                controls=[
-                                    ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, s=scene: open_scene_dialog(s)),
-                                    ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, s=scene: delete_scene(int(s["id"]), str(s.get("name", "Сценарий")))),
-                                ],
-                            ),
+                            ft.Column(spacing=4, controls=[T(str(scene.get("name", "Сценарий")), size=18, weight=ft.FontWeight.BOLD), TM(str(scene.get("description", "")) or "Без описания", size=12)]),
+                            ft.Row(spacing=8, controls=[ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, s=scene: open_scene_dialog(s)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, s=scene: delete_scene(int(s["id"]), str(s.get("name", "Сценарий"))))]),
                         ],
                     ),
                     T("Действия", weight=ft.FontWeight.BOLD),
@@ -770,34 +1084,18 @@ def main(page: ft.Page):
                             content=ft.Row(
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                 controls=[
-                                    ft.Column(
-                                        spacing=2,
-                                        controls=[
-                                            T(str(action.get("deviceName", "Устройство")), weight=ft.FontWeight.BOLD),
-                                            TM(str(action.get("roomName", "Комната не указана")), size=12),
-                                        ],
-                                    ),
+                                    ft.Column(spacing=2, controls=[T(str(action.get("deviceName", "Устройство")), weight=ft.FontWeight.BOLD), TM(str(action.get("roomName", "Комната не указана")), size=12)]),
                                     TM("Включить" if action.get("targetIsOn") else "Выключить", size=12),
                                 ],
                             ),
-                        ) for action in action_lines
+                        )
+                        for action in action_lines
                     ] if action_lines else [TM("В сценарии пока нет действий")]),
                     ft.Row(
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
-                            ft.Column(
-                                spacing=2,
-                                controls=[
-                                    TM(f"Последний запуск: {fmt_dt(scene.get('lastRunAt'))}", size=12),
-                                    TM(f"Статус: {scene.get('lastRunStatus') or 'не запускался'}", size=12),
-                                    TM(scene.get("lastRunMessage") or "", size=12),
-                                ],
-                            ),
-                            ft.ElevatedButton(
-                                "Запустить",
-                                icon=ft.Icons.PLAY_ARROW,
-                                on_click=lambda e, s=scene: run_scene(int(s["id"]), str(s.get("name", "Сценарий"))),
-                            ),
+                            ft.Column(spacing=2, controls=[TM(f"Последний запуск: {fmt_dt(scene.get('lastRunAt'))}", size=12), TM(f"Статус: {scene.get('lastRunStatus') or 'не запускался'}", size=12), TM(scene.get("lastRunMessage") or "", size=12)]),
+                            ft.ElevatedButton("Запустить", icon=ft.Icons.PLAY_ARROW, on_click=lambda e, s=scene: run_scene(int(s["id"]), str(s.get("name", "Сценарий")))),
                         ],
                     ),
                 )
@@ -810,167 +1108,89 @@ def main(page: ft.Page):
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
-                        ft.Column(spacing=4, controls=[T("Сценарии", size=22, weight=ft.FontWeight.BOLD), TM("Создание, изменение, удаление и ручной запуск сцен")]),
-                        ft.Row(
-                            spacing=10,
-                            controls=[
-                                ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog()),
-                                ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
-                            ],
-                        ),
+                        ft.Column(spacing=4, controls=[T("Сценарии", size=22, weight=ft.FontWeight.BOLD), TM("Ручные сценарии, которые могут запускаться и из правил, и по расписанию")]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
                     ],
                 ),
                 *(scene_cards or [card(TM("Сценариев пока нет"))]),
             ],
         )
 
-    def open_rule_dialog():
-        name_tf = field(label="Название правила", hint_text="Например: Движение в коридоре")
-        source_dd = dropdown(label="Источник события", options=[ft.dropdown.Option(str(d["id"]), f'{d["name"]} (#{d["id"]})') for d in data["devices"]])
-        event_tf = field(label="Тип события", value="state")
-        op_dd = dropdown(label="Оператор", value="eq", options=[ft.dropdown.Option("eq"), ft.dropdown.Option("neq"), ft.dropdown.Option("gt"), ft.dropdown.Option("gte"), ft.dropdown.Option("lt"), ft.dropdown.Option("lte"), ft.dropdown.Option("contains")])
-        value_tf = field(label="Значение для сравнения", hint_text="Например: motion или 27")
-        action_dd = dropdown(label="Действие", value="scene", options=[ft.dropdown.Option("scene"), ft.dropdown.Option("device")])
-        scene_dd = dropdown(label="Сценарий", options=[ft.dropdown.Option(str(s["id"]), s["name"]) for s in data["scenes"]])
-        target_device_dd = dropdown(label="Устройство", options=[ft.dropdown.Option(str(d["id"]), d["name"]) for d in data["devices"]])
-        target_state_sw = ft.Switch(label="Целевое состояние ON", value=True)
-
-        def save(_):
-            try:
-                payload = {
-                    "name": (name_tf.value or "").strip(),
-                    "isEnabled": True,
-                    "sourceDeviceId": int(source_dd.value),
-                    "eventType": (event_tf.value or "state").strip(),
-                    "operator": op_dd.value or "eq",
-                    "compareValue": (value_tf.value or "").strip(),
-                    "actionType": action_dd.value or "scene",
-                    "actionSceneId": int(scene_dd.value) if (action_dd.value == "scene" and scene_dd.value) else None,
-                    "actionDeviceId": int(target_device_dd.value) if (action_dd.value == "device" and target_device_dd.value) else None,
-                    "actionTargetIsOn": bool(target_state_sw.value) if action_dd.value == "device" else None,
-                }
-                api_request("post", "/api/rules", payload)
-                close_dialog(dialog)
-                refresh_all()
-                build()
-                show_message("Правило создано")
-            except Exception as ex:
-                show_message(str(ex))
-
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=T("Создать правило", weight=ft.FontWeight.BOLD),
-            content=ft.Container(width=760, content=ft.Column(tight=True, spacing=10, controls=[name_tf, source_dd, event_tf, op_dd, value_tf, action_dd, scene_dd, target_device_dd, target_state_sw])),
-            actions=[ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)), ft.ElevatedButton("Сохранить", on_click=save)],
-        )
-        show_dialog(dialog)
-
     def rules_view() -> ft.Control:
-        def send_event(device_id: int):
-            event_tf = field(label="Тип события", value="state")
-            value_tf = field(label="Значение", value="motion")
-
-            def run_event(_):
-                try:
-                    api_request("post", "/api/rules/process-event", {"deviceId": device_id, "eventType": event_tf.value, "value": value_tf.value})
-                    close_dialog(dialog)
-                    refresh_all()
-                    build()
-                    show_message("Событие обработано")
-                except Exception as ex:
-                    show_message(str(ex))
-
-            dialog = ft.AlertDialog(
-                modal=True,
-                title=T("Тест события датчика", weight=ft.FontWeight.BOLD),
-                content=ft.Column(tight=True, spacing=10, controls=[event_tf, value_tf]),
-                actions=[ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)), ft.ElevatedButton("Отправить", on_click=run_event)],
-            )
-            show_dialog(dialog)
-
-        cards = []
+        rule_cards = []
         for rule in data["rules"]:
-            cards.append(card(
-                T(str(rule.get("name", "Правило")), size=18, weight=ft.FontWeight.BOLD),
-                TM(f"Если {rule.get('eventType')} {rule.get('operator')} {rule.get('compareValue')} (device #{rule.get('sourceDeviceId')})"),
-                TM(f"Действие: {rule.get('actionType')} · срабатываний: {rule.get('triggerCount', 0)}"),
-                ft.Row(spacing=8, controls=[
-                    ft.OutlinedButton("Тест события", on_click=lambda e, d=rule.get("sourceDeviceId"): send_event(int(d))),
-                    ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, rid=rule.get("id"): (api_request("delete", f"/api/rules/{int(rid)}"), refresh_all(), build())),
-                ])
-            ))
-        trigger_cards = [card(T(str(t.get("ruleName", "Триггер")), weight=ft.FontWeight.BOLD), TM(f"{fmt_dt(t.get('triggeredAt'))} · {t.get('message')}")) for t in data["rule_triggers"][:10]]
-        return ft.Column(scroll=ft.ScrollMode.AUTO, spacing=14, controls=[
-            ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                ft.Column(spacing=4, controls=[T("Автоматизация по событиям", size=22, weight=ft.FontWeight.BOLD), TM("Правила вида if-event-then-action")]),
-                ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
-            ]),
-            *(cards or [card(TM("Правил пока нет"))]),
-            T("Последние срабатывания", size=18, weight=ft.FontWeight.BOLD),
-            *(trigger_cards or [card(TM("Срабатываний пока нет"))]),
-        ])
+            if rule.get("actionKind") == "scene_run":
+                action_text = f"Запустить сценарий: {rule.get('actionSceneName', '—')}"
+            else:
+                action_text = f"Устройство: {rule.get('actionDeviceName', '—')} -> {'ON' if rule.get('actionTargetIsOn') else 'OFF'}"
+            rule_cards.append(
+                card(
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Column(spacing=4, controls=[T(str(rule.get("name", "Правило")), size=18, weight=ft.FontWeight.BOLD), TM(str(rule.get("description", "")) or "Без описания", size=12), TM(f"Если {rule.get('triggerDeviceName', 'датчик')} / {rule.get('triggerEventType', 'event')} {rule.get('comparisonOperator', '=')} {rule.get('compareValue', '')}", size=12)]),
+                            ft.Row(spacing=8, controls=[status_chip("Активно" if rule.get("isEnabled") else "Выключено", "enabled" if rule.get("isEnabled") else "disabled"), ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, r=rule: open_rule_dialog(r)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, r=rule: delete_rule(int(r["id"]), str(r.get("name", "Правило"))))]),
+                        ],
+                    ),
+                    TM(action_text, size=12),
+                    TM(f"Последнее срабатывание: {fmt_dt(rule.get('lastTriggeredAt'))}", size=12),
+                    TM(rule.get("lastTriggerMessage") or "", size=12),
+                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not rule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if rule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=lambda e, rid=rule["id"], enabled=not bool(rule.get("isEnabled")): set_rule_enabled(int(rid), enabled)), ft.OutlinedButton("Тест событием", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog())]),
+                )
+            )
 
-    def open_schedule_dialog():
-        name_tf = field(label="Название расписания", hint_text="Например: Утренний запуск")
-        days_tf = field(label="Дни недели", value="1,2,3,4,5,6,7", hint_text="1=Пн ... 7=Вс")
-        time_tf = field(label="Время HH:mm", value="08:00")
-        action_dd = dropdown(label="Действие", value="scene", options=[ft.dropdown.Option("scene"), ft.dropdown.Option("device")])
-        scene_dd = dropdown(label="Сценарий", options=[ft.dropdown.Option(str(s["id"]), s["name"]) for s in data["scenes"]])
-        device_dd = dropdown(label="Устройство", options=[ft.dropdown.Option(str(d["id"]), d["name"]) for d in data["devices"]])
-        target_sw = ft.Switch(label="Целевое состояние ON", value=True)
-
-        def save(_):
-            try:
-                payload = {
-                    "name": (name_tf.value or "").strip(),
-                    "isEnabled": True,
-                    "daysOfWeek": (days_tf.value or "").strip(),
-                    "timeOfDay": (time_tf.value or "").strip(),
-                    "actionType": action_dd.value or "scene",
-                    "actionSceneId": int(scene_dd.value) if action_dd.value == "scene" and scene_dd.value else None,
-                    "actionDeviceId": int(device_dd.value) if action_dd.value == "device" and device_dd.value else None,
-                    "actionTargetIsOn": bool(target_sw.value) if action_dd.value == "device" else None,
-                }
-                api_request("post", "/api/schedules", payload)
-                close_dialog(dialog)
-                refresh_all()
-                build()
-                show_message("Расписание создано")
-            except Exception as ex:
-                show_message(str(ex))
-
-        dialog = ft.AlertDialog(
-            modal=True,
-            title=T("Создать расписание", weight=ft.FontWeight.BOLD),
-            content=ft.Container(width=760, content=ft.Column(tight=True, spacing=10, controls=[name_tf, days_tf, time_tf, action_dd, scene_dd, device_dd, target_sw])),
-            actions=[ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)), ft.ElevatedButton("Сохранить", on_click=save)],
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(spacing=4, controls=[T("Правила", size=22, weight=ft.FontWeight.BOLD), TM("Если событие датчика подходит под условие, выполняется действие или сценарий")]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog()), ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+                    ],
+                ),
+                *(rule_cards or [card(TM("Правил пока нет"))]),
+            ],
         )
-        show_dialog(dialog)
 
     def schedules_view() -> ft.Control:
-        cards = []
+        schedule_cards = []
         for schedule in data["schedules"]:
-            cards.append(card(
-                T(str(schedule.get("name", "Расписание")), size=18, weight=ft.FontWeight.BOLD),
-                TM(f"Дни: {schedule.get('daysOfWeek')} · Время: {schedule.get('timeOfDay')}"),
-                TM(f"Действие: {schedule.get('actionType')} · Последний запуск: {fmt_dt(schedule.get('lastRunAt'))}"),
-                ft.Row(spacing=8, controls=[
-                    ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, sid=schedule.get("id"): (api_request("delete", f"/api/schedules/{int(sid)}"), refresh_all(), build())),
-                ])
-            ))
-        run_cards = [card(T(str(r.get("scheduleName", "Запуск")), weight=ft.FontWeight.BOLD), TM(f"{fmt_dt(r.get('startedAt'))} · {r.get('message')}")) for r in data["schedule_runs"][:10]]
-        return ft.Column(scroll=ft.ScrollMode.AUTO, spacing=14, controls=[
-            ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[
-                ft.Column(spacing=4, controls=[T("Расписание", size=22, weight=ft.FontWeight.BOLD), TM("Запуск действий по времени и дням недели")]),
-                ft.Row(spacing=10, controls=[
-                    ft.ElevatedButton("Создать расписание", icon=ft.Icons.SCHEDULE, on_click=lambda e: open_schedule_dialog()),
-                    ft.OutlinedButton("Запустить планировщик", on_click=lambda e: (api_request("post", "/api/schedules/run-due", {}), refresh_all(True), build())),
-                ]),
-            ]),
-            *(cards or [card(TM("Расписаний пока нет"))]),
-            T("История запусков", size=18, weight=ft.FontWeight.BOLD),
-            *(run_cards or [card(TM("История запусков пока пустая"))]),
-        ])
+            if schedule.get("actionKind") == "scene_run":
+                action_text = f"Запустить сценарий: {schedule.get('actionSceneName', '—')}"
+            else:
+                action_text = f"Устройство: {schedule.get('actionDeviceName', '—')} -> {'ON' if schedule.get('actionTargetIsOn') else 'OFF'}"
+            schedule_cards.append(
+                card(
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Column(spacing=4, controls=[T(str(schedule.get("name", "Расписание")), size=18, weight=ft.FontWeight.BOLD), TM(str(schedule.get("description", "")) or "Без описания", size=12), TM(f"Время: {schedule.get('timeOfDay', '—')} · Дни: {schedule_days_title(schedule.get('daysOfWeek'))}", size=12)]),
+                            ft.Row(spacing=8, controls=[status_chip("Активно" if schedule.get("isEnabled") else "Выключено", "enabled" if schedule.get("isEnabled") else "disabled"), ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, s=schedule: open_schedule_dialog(s)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, s=schedule: delete_schedule(int(s["id"]), str(s.get("name", "Расписание"))))]),
+                        ],
+                    ),
+                    TM(action_text, size=12),
+                    TM(f"Последний запуск: {fmt_dt(schedule.get('lastRunAt'))}", size=12),
+                    TM(schedule.get("lastRunMessage") or "", size=12),
+                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not schedule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if schedule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=lambda e, sid=schedule["id"], enabled=not bool(schedule.get("isEnabled")): set_schedule_enabled(int(sid), enabled)), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=lambda e: run_due_schedules())]),
+                )
+            )
+
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(spacing=4, controls=[T("Расписание", size=22, weight=ft.FontWeight.BOLD), TM("Автоматический запуск действий и сценариев по времени")]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog()), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=lambda e: run_due_schedules()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+                    ],
+                ),
+                *(schedule_cards or [card(TM("Расписаний пока нет"))]),
+            ],
+        )
 
     def history_view() -> ft.Control:
         return ft.Column(
@@ -980,22 +1200,17 @@ def main(page: ft.Page):
                 ft.Row(
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
-                        ft.Column(spacing=4, controls=[T("История и логирование", size=22, weight=ft.FontWeight.BOLD), TM("Логи backend и результаты выполнения сцен")]),
+                        ft.Column(spacing=4, controls=[T("История и логирование", size=22, weight=ft.FontWeight.BOLD), TM("Логи backend, правила, расписания и результаты сценариев")]),
                         ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
                     ],
                 ),
                 *([
                     card(
-                        ft.Row(
-                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                            controls=[
-                                T(str(log.get("message", "Событие")), weight=ft.FontWeight.BOLD),
-                                TM(fmt_dt(log.get("ts")), size=12),
-                            ],
-                        ),
+                        ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[T(str(log.get("message", "Событие")), weight=ft.FontWeight.BOLD), TM(fmt_dt(log.get("ts")), size=12)]),
                         TM(f"Тип: {log.get('eventType', 'EVENT')} · Источник: {log.get('source', 'api')}", size=12),
-                        TM(f"severity={log.get('severity', 'info')} · deviceId={log.get('deviceId')} · sceneId={log.get('sceneId')}", size=12),
-                    ) for log in data["logs"]
+                        TM(f"deviceId={log.get('deviceId')} · sceneId={log.get('sceneId')} · runId={log.get('runId')}", size=12),
+                    )
+                    for log in data["logs"]
                 ] or [card(TM("Логи пока пустые"))]),
             ],
         )
@@ -1014,16 +1229,8 @@ def main(page: ft.Page):
             spacing=14,
             controls=[
                 T("Настройки", size=22, weight=ft.FontWeight.BOLD),
-                card(
-                    T("Интерфейс", weight=ft.FontWeight.BOLD),
-                    dark_sw,
-                    ft.ElevatedButton("Сохранить", on_click=save_settings),
-                ),
-                card(
-                    T("Подключение к API", weight=ft.FontWeight.BOLD),
-                    TM(f"Base URL: {API_BASE}"),
-                    TM("Backend должен быть запущен на ASP.NET Core приложении из backend/CalHouse.Api"),
-                ),
+                card(T("Интерфейс", weight=ft.FontWeight.BOLD), dark_sw, ft.ElevatedButton("Сохранить", on_click=save_settings)),
+                card(T("Подключение к API", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}"), TM("Основной backend должен быть запущен из backend/CalHouse.Api"), TM("Flet UI работает поверх ASP.NET Core API, а не через отдельный python_api слой")),
             ],
         )
 
@@ -1035,7 +1242,7 @@ def main(page: ft.Page):
             ft.NavigationBarDestination(icon=ft.Icons.FLASH_ON_OUTLINED, selected_icon=ft.Icons.FLASH_ON, label="Устройства"),
             ft.NavigationBarDestination(icon=ft.Icons.MEETING_ROOM, selected_icon=ft.Icons.MEETING_ROOM, label="Комнаты"),
             ft.NavigationBarDestination(icon=ft.Icons.AUTO_AWESOME, selected_icon=ft.Icons.AUTO_AWESOME, label="Сценарии"),
-            ft.NavigationBarDestination(icon=ft.Icons.SENSORS, selected_icon=ft.Icons.SENSORS, label="Правила"),
+            ft.NavigationBarDestination(icon=ft.Icons.RULE, selected_icon=ft.Icons.RULE, label="Правила"),
             ft.NavigationBarDestination(icon=ft.Icons.SCHEDULE, selected_icon=ft.Icons.SCHEDULE, label="Расписание"),
             ft.NavigationBarDestination(icon=ft.Icons.HISTORY_OUTLINED, selected_icon=ft.Icons.HISTORY, label="История"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Настройки"),
@@ -1052,12 +1259,7 @@ def main(page: ft.Page):
         page.bgcolor = c("bg")
         page.navigation_bar = nav
         nav.selected_index = state["tab"]
-        page.appbar = ft.AppBar(
-            bgcolor=c("nav"),
-            title=ft.Text("CALHouse", color=c("text"), weight=ft.FontWeight.BOLD),
-            actions=[ft.IconButton(ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()), icon_color=c("text"))],
-        )
-
+        page.appbar = ft.AppBar(bgcolor=c("nav"), title=ft.Text("CALHouse", color=c("text"), weight=ft.FontWeight.BOLD), actions=[ft.IconButton(ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()), icon_color=c("text"))])
         views = {
             0: home_view,
             1: devices_view,
