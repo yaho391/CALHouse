@@ -116,4 +116,9 @@ C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\s
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\CalHouse.77F4A690.Up2Date
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\CalHouse.Api.genruntimeconfig.cache
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\ref\CalHouse.Api.dll
-C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\staticwebassets.upToDateCheck.txt
+C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\App_Data\devices.json
+C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.staticwebassets.endpoints.json
+C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.deps.json
+C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.runtimeconfig.json
+C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.dll
+C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.pdb

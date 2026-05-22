@@ -156,7 +156,7 @@ SELECT last_insert_rowid();";
             var finalExternalId = string.IsNullOrWhiteSpace(externalId) ? current.ExternalId : NormalizeRequired(externalId, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED");
             var finalManufacturer = manufacturer is null ? current.Manufacturer : NormalizeOptional(manufacturer, string.Empty);
             var finalModel = model is null ? current.Model : NormalizeOptional(model, string.Empty);
-            var finalConnection = connection is null || connection.Count == 0 ? current.Connection : NormalizeConnection(connection);
+            var finalConnection = connection is null ? current.Connection : NormalizeConnection(connection);
             var finalIsOn = isOn ?? current.IsOn;
             var finalRoomId = ResolveRoomId(db, transaction, roomId ?? current.RoomId, roomName, createIfMissing: !string.IsNullOrWhiteSpace(roomName));
             var now = DateTime.UtcNow;
@@ -217,17 +217,38 @@ WHERE Id = @id;";
             var current = ReadDeviceOrThrow(db, id);
             using var transaction = db.BeginTransaction();
             var nextState = !current.IsOn;
+            var commandResult = ExecuteDeviceStateCommand(current, nextState);
             var now = DateTime.UtcNow;
 
             var command = db.CreateCommand();
             command.Transaction = transaction;
-            command.CommandText = "UPDATE Devices SET IsOn = @isOn, UpdatedAt = @updatedAt WHERE Id = @id;";
+            command.CommandText = @"
+UPDATE Devices
+SET IsOn = @isOn,
+    ConnectionStatus = @connectionStatus,
+    ConnectionMessage = @connectionMessage,
+    LastConnectionCheckAt = @lastConnectionCheckAt,
+    UpdatedAt = @updatedAt
+WHERE Id = @id;";
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@isOn", nextState ? 1 : 0);
+            command.Parameters.AddWithValue("@isOn", commandResult.Ok ? (nextState ? 1 : 0) : (current.IsOn ? 1 : 0));
+            command.Parameters.AddWithValue("@connectionStatus", commandResult.Status);
+            command.Parameters.AddWithValue("@connectionMessage", commandResult.Message);
+            command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
             command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
             command.ExecuteNonQuery();
 
-            LogEvent(db, transaction, "info", "api", "DEVICE_TOGGLED", $"Устройство «{current.Name}» переключено в {(nextState ? "ON" : "OFF")}", deviceId: id, roomId: current.RoomId);
+            LogEvent(
+                db,
+                transaction,
+                commandResult.Ok ? "info" : "warning",
+                "api",
+                commandResult.Ok ? "DEVICE_TOGGLED" : "DEVICE_TOGGLE_FAILED",
+                commandResult.Ok
+                    ? $"Устройство «{current.Name}» переключено в {(nextState ? "ON" : "OFF")}. {commandResult.Message}"
+                    : $"Не удалось переключить устройство «{current.Name}» в {(nextState ? "ON" : "OFF")}: {commandResult.Message}",
+                deviceId: id,
+                roomId: current.RoomId);
             transaction.Commit();
 
             SyncLegacyDevicesJson(db);
@@ -551,30 +572,36 @@ SELECT last_insert_rowid();";
             createRun.Parameters.AddWithValue("@message", "Сценарий запущен");
             var runId = Convert.ToInt32((long)(createRun.ExecuteScalar() ?? 0));
 
+            var failures = new List<string>();
             foreach (var action in scene.Actions.OrderBy(x => x.SortOrder))
             {
-                var updateDevice = db.CreateCommand();
-                updateDevice.Transaction = transaction;
-                updateDevice.CommandText = "UPDATE Devices SET IsOn = @isOn, UpdatedAt = @updatedAt WHERE Id = @deviceId;";
-                updateDevice.Parameters.AddWithValue("@isOn", action.TargetIsOn ? 1 : 0);
-                updateDevice.Parameters.AddWithValue("@updatedAt", DateTime.UtcNow.ToString("O"));
-                updateDevice.Parameters.AddWithValue("@deviceId", action.DeviceId);
-                updateDevice.ExecuteNonQuery();
+                var device = ReadDeviceOrThrow(db, action.DeviceId);
+                var commandResult = ExecuteDeviceStateCommand(device, action.TargetIsOn);
+                UpdateDeviceStateAfterCommand(db, transaction, device, action.TargetIsOn, commandResult);
+                if (!commandResult.Ok)
+                {
+                    failures.Add($"{action.DeviceName}: {commandResult.Message}");
+                }
 
                 LogEvent(
                     db,
                     transaction,
-                    "info",
+                    commandResult.Ok ? "info" : "warning",
                     "scene-engine",
-                    "SCENE_DEVICE_ACTION_APPLIED",
-                    $"Сценарий «{scene.Name}» установил устройство «{action.DeviceName}» в состояние {(action.TargetIsOn ? "ON" : "OFF")}",
+                    commandResult.Ok ? "SCENE_DEVICE_ACTION_APPLIED" : "SCENE_DEVICE_ACTION_FAILED",
+                    commandResult.Ok
+                        ? $"Сценарий «{scene.Name}» установил устройство «{action.DeviceName}» в состояние {(action.TargetIsOn ? "ON" : "OFF")}. {commandResult.Message}"
+                        : $"Сценарий «{scene.Name}» не смог установить устройство «{action.DeviceName}» в состояние {(action.TargetIsOn ? "ON" : "OFF")}: {commandResult.Message}",
                     deviceId: action.DeviceId,
                     sceneId: id,
                     runId: runId);
             }
 
             var completedAt = DateTime.UtcNow;
-            var message = $"Сценарий «{scene.Name}» успешно выполнен. Действий: {scene.Actions.Count}";
+            var runStatus = failures.Count == 0 ? "completed" : "failed";
+            var message = failures.Count == 0
+                ? $"Сценарий «{scene.Name}» успешно выполнен. Действий: {scene.Actions.Count}"
+                : $"Сценарий «{scene.Name}» завершился с ошибками: {string.Join("; ", failures)}";
 
             var finishRun = db.CreateCommand();
             finishRun.Transaction = transaction;
@@ -585,7 +612,7 @@ SET CompletedAt = @completedAt,
     Message = @message
 WHERE Id = @id;";
             finishRun.Parameters.AddWithValue("@completedAt", completedAt.ToString("O"));
-            finishRun.Parameters.AddWithValue("@status", "completed");
+            finishRun.Parameters.AddWithValue("@status", runStatus);
             finishRun.Parameters.AddWithValue("@message", message);
             finishRun.Parameters.AddWithValue("@id", runId);
             finishRun.ExecuteNonQuery();
@@ -600,13 +627,13 @@ SET LastRunAt = @lastRunAt,
     UpdatedAt = @updatedAt
 WHERE Id = @sceneId;";
             updateScene.Parameters.AddWithValue("@lastRunAt", completedAt.ToString("O"));
-            updateScene.Parameters.AddWithValue("@lastRunStatus", "completed");
+            updateScene.Parameters.AddWithValue("@lastRunStatus", runStatus);
             updateScene.Parameters.AddWithValue("@lastRunMessage", message);
             updateScene.Parameters.AddWithValue("@updatedAt", completedAt.ToString("O"));
             updateScene.Parameters.AddWithValue("@sceneId", id);
             updateScene.ExecuteNonQuery();
 
-            LogEvent(db, transaction, "info", "scene-engine", "SCENE_RUN_COMPLETED", message, sceneId: id, runId: runId);
+            LogEvent(db, transaction, failures.Count == 0 ? "info" : "warning", "scene-engine", failures.Count == 0 ? "SCENE_RUN_COMPLETED" : "SCENE_RUN_FAILED", message, sceneId: id, runId: runId);
             transaction.Commit();
 
             SyncLegacyDevicesJson(db);
