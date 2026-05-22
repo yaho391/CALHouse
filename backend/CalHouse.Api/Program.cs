@@ -3,6 +3,7 @@ using CalHouse.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
 
+builder.Services.AddSingleton<DeviceCatalogService>();
 builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddHostedService<ScheduleBackgroundService>();
 builder.Services.AddEndpointsApiExplorer();
@@ -31,7 +32,11 @@ app.MapGet("/", () => Results.Text("CalHouse API is running"));
 
 var api = app.MapGroup("/api");
 
-api.MapGet("/device-catalog", (DeviceStore store) => Results.Ok(store.GetDeviceCatalog()));
+api.MapGet("/device-catalog", (DeviceCatalogService catalog) => Results.Ok(catalog.GetCatalog()));
+api.MapGet("/device-catalog/types", (DeviceCatalogService catalog) => Results.Ok(catalog.GetDeviceTypes()));
+api.MapGet("/device-catalog/providers", (DeviceCatalogService catalog) => Results.Ok(catalog.GetProviders()));
+api.MapGet("/device-catalog/types/{typeCode}/providers", (string typeCode, DeviceCatalogService catalog) => Handle(() => Results.Ok(catalog.GetProvidersForType(typeCode))));
+api.MapGet("/device-catalog/form-schema", (string typeCode, string providerCode, DeviceCatalogService catalog) => Handle(() => Results.Ok(catalog.GetFormSchema(typeCode, providerCode))));
 
 api.MapGet("/devices", (int? roomId, DeviceStore store) => Results.Ok(store.GetAllDevices(roomId)));
 api.MapGet("/devices/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.GetDevice(id))));

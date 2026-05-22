@@ -10,6 +10,7 @@ public partial class DeviceStore
 {
     private readonly string _databasePath;
     private readonly string _legacyDevicesPath;
+    private readonly DeviceCatalogService _catalog;
     private readonly ILogger<DeviceStore> _logger;
     private readonly object _sync = new();
     private readonly JsonSerializerOptions _jsonOptions = new(JsonSerializerDefaults.Web)
@@ -18,8 +19,9 @@ public partial class DeviceStore
         PropertyNameCaseInsensitive = true,
     };
 
-    public DeviceStore(IWebHostEnvironment environment, ILogger<DeviceStore> logger)
+    public DeviceStore(IWebHostEnvironment environment, DeviceCatalogService catalog, ILogger<DeviceStore> logger)
     {
+        _catalog = catalog;
         _logger = logger;
 
         var appDataDirectory = Path.Combine(environment.ContentRootPath, "App_Data");
@@ -72,9 +74,11 @@ public partial class DeviceStore
     {
         var cleanName = NormalizeRequired(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED");
         var cleanType = NormalizeOptional(type, "Другое");
-        var cleanProvider = NormalizeOptional(provider, "mock");
-        var cleanProtocol = NormalizeOptional(protocol, InferProtocol(cleanProvider));
-        var cleanChannel = NormalizeOptional(channel, InferChannel(cleanProtocol));
+        var cleanProvider = _catalog.NormalizeProviderCode(provider);
+        cleanType = _catalog.NormalizeDeviceTypeCode(cleanType);
+        _catalog.EnsureProviderAllowed(cleanType, cleanProvider);
+        var cleanProtocol = NormalizeOptional(protocol, _catalog.InferProtocol(cleanProvider));
+        var cleanChannel = NormalizeOptional(channel, _catalog.InferChannel(cleanProvider, cleanProtocol));
         var cleanExternalId = NormalizeRequired(externalId, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED");
         var cleanManufacturer = NormalizeOptional(manufacturer, string.Empty);
         var cleanModel = NormalizeOptional(model, string.Empty);
@@ -144,9 +148,11 @@ SELECT last_insert_rowid();";
 
             var finalName = string.IsNullOrWhiteSpace(name) ? current.Name : NormalizeRequired(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED");
             var finalType = string.IsNullOrWhiteSpace(type) ? current.Type : NormalizeOptional(type, current.Type);
-            var finalProvider = string.IsNullOrWhiteSpace(provider) ? current.Provider : NormalizeOptional(provider, current.Provider);
-            var finalProtocol = string.IsNullOrWhiteSpace(protocol) ? current.Protocol : NormalizeOptional(protocol, current.Protocol);
-            var finalChannel = string.IsNullOrWhiteSpace(channel) ? current.Channel : NormalizeOptional(channel, current.Channel);
+            var finalProvider = string.IsNullOrWhiteSpace(provider) ? _catalog.NormalizeProviderCode(current.Provider) : _catalog.NormalizeProviderCode(provider);
+            finalType = _catalog.NormalizeDeviceTypeCode(finalType);
+            _catalog.EnsureProviderAllowed(finalType, finalProvider);
+            var finalProtocol = protocol is null ? current.Protocol : NormalizeOptional(protocol, _catalog.InferProtocol(finalProvider));
+            var finalChannel = channel is null ? current.Channel : NormalizeOptional(channel, _catalog.InferChannel(finalProvider, finalProtocol));
             var finalExternalId = string.IsNullOrWhiteSpace(externalId) ? current.ExternalId : NormalizeRequired(externalId, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED");
             var finalManufacturer = manufacturer is null ? current.Manufacturer : NormalizeOptional(manufacturer, string.Empty);
             var finalModel = model is null ? current.Model : NormalizeOptional(model, string.Empty);

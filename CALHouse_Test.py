@@ -4,7 +4,29 @@ from datetime import datetime
 from typing import Any
 
 API_BASE = "http://localhost:5000"
-DEFAULT_DEVICE_TYPES = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Замок", "Штора", "Другое"]
+DEBUG_DEVICE_FORM = False
+DEFAULT_DEVICE_TYPES = [
+    {"code": "light", "displayName": "Свет", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
+    {"code": "socket", "displayName": "Розетка", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
+    {"code": "relay", "displayName": "Реле", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
+    {"code": "motion_sensor", "displayName": "Датчик движения", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
+    {"code": "temperature_sensor", "displayName": "Датчик температуры", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
+    {"code": "thermostat", "displayName": "Термостат", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
+    {"code": "camera", "displayName": "Камера", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
+    {"code": "generic", "displayName": "Другое", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
+]
+DEFAULT_PROVIDERS = [
+    {
+        "code": "mock",
+        "key": "mock",
+        "displayName": "Локальный тестовый режим",
+        "title": "Локальный тестовый режим",
+        "protocol": "manual",
+        "channel": "local",
+        "note": "Локальный тестовый режим: сетевые параметры не нужны, команда не отправляется на реальное устройство.",
+        "formFields": [],
+    }
+]
 DEFAULT_RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains"]
 DEFAULT_ACTION_KINDS = ["device_state", "scene_run"]
 DEFAULT_SCHEDULE_DAYS = [
@@ -16,6 +38,25 @@ DEFAULT_SCHEDULE_DAYS = [
     {"value": 6, "title": "Сб"},
     {"value": 7, "title": "Вс"},
 ]
+
+CONNECTION_FIELD_LABELS = {
+    "host": "Host / IP",
+    "port": "Port",
+    "url": "URL",
+    "path": "Path",
+    "topic": "Topic",
+    "entity_id": "Entity ID",
+    "state_topic": "Topic состояния",
+    "username": "Пользователь",
+    "password": "Пароль / ключ устройства",
+    "device_key": "Пароль / ключ устройства",
+    "token": "Токен",
+    "method": "HTTP-метод",
+    "headers": "Заголовки JSON",
+    "body_template": "Шаблон body",
+    "snapshot_url": "URL снимка",
+    "payload_template": "Шаблон payload",
+}
 
 
 def fmt_dt(value: str | None) -> str:
@@ -126,11 +167,30 @@ def main(page: ft.Page):
         try:
             response = requests.request(method=method.upper(), url=url, json=payload, timeout=timeout)
             if response.status_code >= 400:
+                print(f"[api:error] status_code={response.status_code}", flush=True)
+                print(f"[api:error] response.text={response.text}", flush=True)
                 try:
                     error_data = response.json()
                 except Exception:
                     error_data = {}
                 message = error_data.get("message") or error_data.get("error") or f"HTTP {response.status_code}"
+                error_details = error_data.get("errors") or error_data.get("validationErrors") or error_data.get("details")
+                if error_details:
+                    if isinstance(error_details, dict):
+                        parts = []
+                        for key, value in error_details.items():
+                            if isinstance(value, list):
+                                value_text = ", ".join(str(item) for item in value)
+                            else:
+                                value_text = str(value)
+                            parts.append(f"{key}: {value_text}")
+                        details_text = "; ".join(parts)
+                    elif isinstance(error_details, list):
+                        details_text = "; ".join(str(item) for item in error_details)
+                    else:
+                        details_text = str(error_details)
+                    if details_text:
+                        message = f"{message}: {details_text}"
                 raise RuntimeError(message)
             if not response.text:
                 return None
@@ -205,15 +265,77 @@ def main(page: ft.Page):
         if show_toast:
             show_message("Данные обновлены")
 
+    def device_type_defs() -> list[dict[str, Any]]:
+        items = data["catalog"].get("deviceTypes") or DEFAULT_DEVICE_TYPES
+        if not isinstance(items, list):
+            return DEFAULT_DEVICE_TYPES
+        result: list[dict[str, Any]] = []
+        for item in items:
+            if isinstance(item, dict):
+                result.append(item)
+            else:
+                value = str(item)
+                result.append({"code": value, "displayName": value, "capabilities": {"canToggle": True}, "allowedProviders": []})
+        return result
+
+    def device_type_code(value: Any) -> str:
+        raw = str(value or "").strip()
+        if not raw:
+            return "generic"
+        lowered = raw.lower()
+        for item in device_type_defs():
+            candidates = [item.get("code"), item.get("displayName"), *(item.get("legacyNames") or [])]
+            if any(str(candidate or "").lower() == lowered for candidate in candidates):
+                return str(item.get("code", raw))
+        return raw
+
     def device_types() -> list[str]:
-        return data["catalog"].get("deviceTypes") or DEFAULT_DEVICE_TYPES
+        return [str(item.get("code", "")) for item in device_type_defs()]
+
+    def device_type_title(code: Any) -> str:
+        normalized = device_type_code(code)
+        for item in device_type_defs():
+            if str(item.get("code", "")) == normalized:
+                return str(item.get("displayName", normalized))
+        return normalized
+
+    def device_type_capabilities(code: Any) -> dict[str, Any]:
+        normalized = device_type_code(code)
+        for item in device_type_defs():
+            if str(item.get("code", "")) == normalized:
+                capabilities = item.get("capabilities") or {}
+                return capabilities if isinstance(capabilities, dict) else {}
+        return {}
 
     def providers() -> list[dict[str, Any]]:
-        items = data["catalog"].get("providers") or []
-        return items if isinstance(items, list) else []
+        items = data["catalog"].get("providers") or DEFAULT_PROVIDERS
+        return items if isinstance(items, list) else DEFAULT_PROVIDERS
 
     def provider_map() -> dict[str, dict[str, Any]]:
-        return {str(item.get("key", "")): item for item in providers()}
+        result: dict[str, dict[str, Any]] = {}
+        for item in providers():
+            keys = [item.get("code"), item.get("key"), *(item.get("legacyKeys") or [])]
+            for key in keys:
+                if key:
+                    result[str(key)] = item
+        return result
+
+    def provider_code(value: Any) -> str:
+        raw = str(value or "mock").strip()
+        lowered = raw.lower()
+        for item in providers():
+            candidates = [item.get("code"), item.get("key"), *(item.get("legacyKeys") or [])]
+            if any(str(candidate or "").lower() == lowered for candidate in candidates):
+                return str(item.get("code", item.get("key", raw)))
+        return raw
+
+    def providers_for_type(type_code: Any) -> list[dict[str, Any]]:
+        normalized = device_type_code(type_code)
+        type_def = next((item for item in device_type_defs() if str(item.get("code", "")) == normalized), None)
+        allowed = {provider_code(x) for x in ((type_def or {}).get("allowedProviders") or [])}
+        if not allowed:
+            return providers()
+        return [item for item in providers() if provider_code(item.get("code", item.get("key", ""))) in allowed]
 
     def rule_operators() -> list[str]:
         return data["catalog"].get("ruleOperators") or DEFAULT_RULE_OPERATORS
@@ -230,7 +352,9 @@ def main(page: ft.Page):
     def device_options(sensor_first: bool = False) -> list[ft.dropdown.Option]:
         items = data["devices"]
         if sensor_first:
-            items = sorted(items, key=lambda item: (0 if item.get("type") == "Датчик" else 1, str(item.get("name", ""))))
+            sensor_types = {"motion_sensor", "temperature_sensor"}
+            items = sorted(items, key=lambda item: (0 if device_type_code(item.get("type")) in sensor_types else 1, str(item.get("name", ""))))
+            return [ft.dropdown.Option(str(device["id"]), device["name"]) for device in items]
         return [ft.dropdown.Option(str(device["id"]), device["name"]) for device in items]
 
     def scene_options() -> list[ft.dropdown.Option]:
@@ -245,8 +369,37 @@ def main(page: ft.Page):
     def provider_title(key: str | None) -> str:
         if not key:
             return "—"
-        item = provider_map().get(key)
-        return str(item.get("title", key)) if item else str(key)
+        code = provider_code(key)
+        item = provider_map().get(code)
+        return str(item.get("displayName", item.get("title", code))) if item else str(key)
+
+    def provider_option(provider: dict[str, Any]) -> ft.dropdown.Option:
+        code = provider_code(provider.get("code", provider.get("key", "mock")))
+        title = str(provider.get("displayName", provider.get("title", code)))
+        return ft.dropdown.Option(code, title)
+
+    def provider_form_fields(provider: dict[str, Any]) -> list[dict[str, Any]]:
+        form_fields = provider.get("formFields")
+        if isinstance(form_fields, list) and form_fields:
+            return [item for item in form_fields if isinstance(item, dict)]
+
+        required = [str(name) for name in (provider.get("requiredFields") or [])]
+        optional = [str(name) for name in (provider.get("optionalFields") or [])]
+        fields: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for name in [*required, *optional]:
+            if name in seen:
+                continue
+            seen.add(name)
+            fields.append(
+                {
+                    "name": name,
+                    "label": CONNECTION_FIELD_LABELS.get(name, name),
+                    "kind": "password" if name in {"password", "device_key", "token"} else "text",
+                    "required": name in required,
+                }
+            )
+        return fields
 
     def action_kind_title(kind: str | None) -> str:
         if kind == "device_state":
@@ -324,65 +477,276 @@ def main(page: ft.Page):
         return status_chip("Включено" if value else "Выключено", "connected" if value else "disabled")
 
     def open_device_dialog(device: dict[str, Any] | None = None):
+        load_catalog(show_error=True)
         editing = device is not None
-        providers_dict = provider_map()
-        provider_key = str((device or {}).get("provider", "mock") or "mock")
-        provider_info = providers_dict.get(provider_key, {"protocol": "manual", "channel": "local", "note": ""})
+        catalog_is_loaded = bool(data["catalog"].get("providers")) and bool(data["catalog"].get("deviceTypes"))
+        if not catalog_is_loaded:
+            show_message("Каталог провайдеров не загружен. Доступен только локальный тестовый режим.")
+        selected_type = device_type_code((device or {}).get("type", "generic"))
+        provider_key = provider_code((device or {}).get("provider", "mock") or "mock")
 
         name_tf = field(label="Название", value=(device or {}).get("name", ""), hint_text="Например: Лампа IKEA")
         external_id_tf = field(label="Идентификатор", value=(device or {}).get("externalId", ""), hint_text="Например: kitchen-light-01")
         manufacturer_tf = field(label="Производитель", value=(device or {}).get("manufacturer", ""))
         model_tf = field(label="Модель", value=(device or {}).get("model", ""))
-        type_dd = dropdown(label="Тип устройства", value=(device or {}).get("type", device_types()[0]), options=[ft.dropdown.Option(x) for x in device_types()])
-        provider_dd = dropdown(label="Провайдер", value=provider_key, options=[ft.dropdown.Option(item.get("key"), item.get("title")) for item in providers()])
-        protocol_tf = field(label="Протокол", value=str((device or {}).get("protocol", provider_info.get("protocol", "manual"))))
-        channel_tf = field(label="Канал", value=str((device or {}).get("channel", provider_info.get("channel", "local"))))
+        type_dd = dropdown(label="Тип устройства", value=selected_type, options=[ft.dropdown.Option(item.get("code"), item.get("displayName")) for item in device_type_defs()])
+        provider_dd = dropdown(label="Провайдер", value=provider_key, options=[provider_option(item) for item in providers_for_type(selected_type)])
+        protocol_tf = field(label="Протокол", value=str((device or {}).get("protocol", "manual")))
+        channel_tf = field(label="Канал", value=str((device or {}).get("channel", "local")))
         room_dd = dropdown(label="Комната из списка", value=str(device.get("roomId")) if editing and device.get("roomId") is not None else None, options=room_options())
         new_room_tf = field(label="Или новая комната", value="" if editing else (device or {}).get("room", ""), hint_text="Оставь пустым, если выбрал комнату выше")
         is_on_sw = ft.Switch(label="Включить сразу", value=bool((device or {}).get("isOn", False)))
 
         existing_conn = (device or {}).get("connection", {}) or {}
-        host_tf = field(label="Host / IP", value=existing_conn.get("host", ""))
-        port_tf = field(label="Port", value=str(existing_conn.get("port", "")))
-        url_tf = field(label="URL", value=existing_conn.get("url", ""))
-        path_tf = field(label="Path", value=existing_conn.get("path", ""))
-        topic_tf = field(label="Topic / Entity ID", value=existing_conn.get("topic", existing_conn.get("entity_id", "")))
-        username_tf = field(label="Username", value=existing_conn.get("username", ""))
-        password_tf = field(label="Password / Device key", value=existing_conn.get("password", existing_conn.get("device_key", "")), password=True, can_reveal_password=True)
-        token_tf = field(label="Token", value=existing_conn.get("token", ""), password=True, can_reveal_password=True)
-        note_text = TM(str(provider_info.get("note", "")), size=12)
+        connection_controls: dict[str, ft.TextField] = {}
+        connection_fields_column = ft.Column(spacing=10, controls=[])
+        note_text = TM("", size=12)
+        form_status_text = TM("", size=12, color="#92400e")
         test_result = TM("", size=12)
+        active_schema_names: set[str] = set()
+
+        def debug_device_form(stage: str, **values: Any):
+            if not DEBUG_DEVICE_FORM:
+                return
+            parts = [f"{key}={value!r}" for key, value in values.items()]
+            print(f"[device-form:{stage}] " + " ".join(parts), flush=True)
+
+        def event_value(e: ft.ControlEvent, fallback: Any) -> Any:
+            data_value = getattr(e, "data", None)
+            if data_value is not None and str(data_value).strip():
+                return data_value
+            control = getattr(e, "control", None)
+            control_value = getattr(control, "value", None)
+            if control_value is not None and str(control_value).strip():
+                return control_value
+            return fallback
+
+        def resolve_provider_code(value: Any) -> str:
+            raw = str(value or "").strip()
+            for option in (provider_dd.options or []):
+                option_key = str(getattr(option, "key", "") or "")
+                option_text = str(getattr(option, "text", "") or "")
+                if raw and raw in {option_key, option_text}:
+                    return provider_code(option_key or raw)
+            return provider_code(raw)
+
+        def update_dynamic_form_controls():
+            for control in [type_dd, provider_dd, protocol_tf, channel_tf, note_text, form_status_text, is_on_sw, connection_fields_column]:
+                try:
+                    if getattr(control, "page", None):
+                        control.update()
+                except Exception:
+                    pass
+            try:
+                if getattr(dialog.content, "page", None):
+                    dialog.content.update()
+            except Exception:
+                pass
+            try:
+                if getattr(dialog, "page", None):
+                    dialog.update()
+            except Exception:
+                pass
+            page.update()
+
+        def sync_provider_options(type_code: Any, preferred_provider: Any | None = None, source: str = "sync"):
+            provider_before = provider_dd.value
+            options = providers_for_type(type_code)
+            all_providers = {
+                resolve_provider_code(item.get("code", item.get("key", "mock"))): item
+                for item in providers()
+            }
+            requested = resolve_provider_code(preferred_provider if preferred_provider is not None else provider_dd.value)
+            option_codes = [resolve_provider_code(item.get("code", item.get("key", "mock"))) for item in options]
+            provider_dd.options = [provider_option(item) for item in options]
+            allowed = option_codes
+            fallback_used = False
+
+            if requested in allowed:
+                selected = requested
+            elif allowed:
+                selected = allowed[0]
+                fallback_used = True
+            elif requested in all_providers:
+                selected = requested
+            else:
+                selected = "mock"
+                fallback_used = True
+
+            provider_dd.value = selected
+            provider = all_providers.get(selected)
+            if provider is None and options:
+                provider = options[0]
+                provider_dd.value = resolve_provider_code(provider.get("code", provider.get("key", "mock")))
+                fallback_used = True
+            if provider is None:
+                fallback_used = True
+            selected_provider = resolve_provider_code((provider or DEFAULT_PROVIDERS[0]).get("code", (provider or DEFAULT_PROVIDERS[0]).get("key", "mock")))
+            debug_device_form(
+                "sync_provider_options",
+                source=source,
+                type=type_code,
+                preferred_provider=preferred_provider,
+                provider_before=provider_before,
+                requested=requested,
+                provider_after=provider_dd.value,
+                allowed=allowed,
+                selected_provider=selected_provider,
+                fallback_used=fallback_used,
+            )
+            return provider or DEFAULT_PROVIDERS[0], allowed, fallback_used
+
+        def existing_connection_value(name: str) -> str:
+            if name == "password":
+                return str(existing_conn.get("password", existing_conn.get("device_key", "")) or "")
+            if name == "device_key":
+                return str(existing_conn.get("device_key", existing_conn.get("password", "")) or "")
+            return str(existing_conn.get(name, "") or "")
+
+        def create_connection_control(field_def: dict[str, Any]) -> ft.TextField:
+            name = str(field_def.get("name", "")).strip()
+            label = str(field_def.get("label") or CONNECTION_FIELD_LABELS.get(name, name))
+            required = bool(field_def.get("required"))
+            kind = str(field_def.get("kind", "text")).lower()
+            secret = bool(field_def.get("secret")) or kind == "password" or name in {"password", "device_key", "token"}
+            multiline = kind in {"textarea", "multiline"} or name in {"headers", "body_template", "payload_template"}
+            kwargs = {
+                "label": f"{label} *" if required else label,
+                "value": existing_connection_value(name),
+                "hint_text": str(field_def.get("placeholder") or ""),
+                "password": secret,
+                "can_reveal_password": secret,
+                "multiline": multiline,
+            }
+            if multiline:
+                kwargs["min_lines"] = 3
+            return field(**kwargs)
+
+        def apply_form_schema(preferred_provider: Any | None = None, source: str = "apply"):
+            nonlocal active_schema_names
+            provider_before = provider_dd.value
+            current_type = device_type_code(type_dd.value)
+            provider, allowed, fallback_used = sync_provider_options(current_type, preferred_provider, source)
+            current_provider = resolve_provider_code(provider.get("code", provider.get("key", provider_dd.value)))
+            schema_fields = provider_form_fields(provider)
+            active_schema_names = {str(item.get("name", "")).strip() for item in schema_fields if isinstance(item, dict) and str(item.get("name", "")).strip()}
+
+            connection_controls.clear()
+            new_connection_controls: list[ft.Control] = []
+            for field_def in schema_fields:
+                name = str(field_def.get("name", "")).strip()
+                if not name:
+                    continue
+                control = create_connection_control(field_def)
+                connection_controls[name] = control
+                new_connection_controls.append(control)
+
+            connection_fields_column.controls.clear()
+            connection_fields_column.controls.extend(new_connection_controls)
+            connection_fields_column.visible = bool(connection_fields_column.controls)
+            caps = device_type_capabilities(current_type)
+            is_on_sw.visible = bool(caps.get("canToggle", True))
+            if not is_on_sw.visible:
+                is_on_sw.value = False
+            protocol_tf.value = str(provider.get("protocol", "manual"))
+            channel_tf.value = str(provider.get("channel", "local"))
+            note_text.value = str(provider.get("note", ""))
+
+            status_parts: list[str] = []
+            if not catalog_is_loaded:
+                status_parts.append("\u041a\u0430\u0442\u0430\u043b\u043e\u0433 \u0442\u0438\u043f\u043e\u0432 \u0438 \u043f\u0440\u043e\u0432\u0430\u0439\u0434\u0435\u0440\u043e\u0432 \u043d\u0435 \u0437\u0430\u0433\u0440\u0443\u0436\u0435\u043d. \u0414\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0442\u043e\u043b\u044c\u043a\u043e \u043b\u043e\u043a\u0430\u043b\u044c\u043d\u044b\u0439 \u0442\u0435\u0441\u0442\u043e\u0432\u044b\u0439 \u0440\u0435\u0436\u0438\u043c.")
+            if fallback_used:
+                status_parts.append(f"\u0412\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u043f\u0440\u043e\u0432\u0430\u0439\u0434\u0435\u0440 \u043d\u0435\u0434\u043e\u0441\u0442\u0443\u043f\u0435\u043d \u0434\u043b\u044f \u0442\u0438\u043f\u0430 {current_type}; \u0432\u044b\u0431\u0440\u0430\u043d {provider_dd.value}.")
+            if not provider:
+                status_parts.append("\u0412\u044b\u0431\u0440\u0430\u043d\u043d\u044b\u0439 \u043f\u0440\u043e\u0432\u0430\u0439\u0434\u0435\u0440 \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d \u0432 \u043a\u0430\u0442\u0430\u043b\u043e\u0433\u0435.")
+            if not schema_fields and current_provider != "mock":
+                status_parts.append("\u0421\u0445\u0435\u043c\u0430 \u043f\u0440\u043e\u0432\u0430\u0439\u0434\u0435\u0440\u0430 \u043f\u0443\u0441\u0442\u0430: \u043f\u043e\u043b\u044f \u043f\u043e\u0434\u043a\u043b\u044e\u0447\u0435\u043d\u0438\u044f \u043d\u0435 \u043d\u0430\u0439\u0434\u0435\u043d\u044b.")
+            form_status_text.value = " ".join(status_parts)
+            form_status_text.visible = bool(status_parts)
+
+            debug_device_form(
+                "apply_form_schema",
+                source=source,
+                type=current_type,
+                preferred_provider=preferred_provider,
+                provider_before=provider_before,
+                provider_after=provider_dd.value,
+                selected_provider=current_provider,
+                allowed=allowed,
+                protocol=protocol_tf.value,
+                channel=channel_tf.value,
+                fields=list(connection_controls.keys()),
+                fallback_used=fallback_used,
+            )
 
         def collect_connection() -> dict[str, str]:
             connection = {}
-            pairs = {
-                "host": host_tf.value,
-                "port": port_tf.value,
-                "url": url_tf.value,
-                "path": path_tf.value,
-                "topic": topic_tf.value,
-                "entity_id": topic_tf.value if provider_dd.value == "homeassistant" else "",
-                "username": username_tf.value,
-                "password": password_tf.value,
-                "device_key": password_tf.value,
-                "token": token_tf.value,
-            }
-            for key, value in pairs.items():
-                clean = (value or "").strip()
+            for key, control in connection_controls.items():
+                if active_schema_names and key not in active_schema_names:
+                    continue
+                clean = (control.value or "").strip()
                 if clean:
                     connection[key] = clean
             return connection
 
-        def on_provider_change(_):
-            info = providers_dict.get(str(provider_dd.value), {})
-            if not protocol_tf.value:
-                protocol_tf.value = str(info.get("protocol", "manual"))
-            if not channel_tf.value:
-                channel_tf.value = str(info.get("channel", "local"))
-            note_text.value = str(info.get("note", ""))
-            page.update()
+        def on_type_change(e):
+            provider_before = provider_dd.value
+            raw_value = event_value(e, type_dd.value)
+            debug_device_form(
+                "on_type_change:before",
+                source="type_change",
+                e_control_value=getattr(getattr(e, "control", None), "value", None),
+                e_data=getattr(e, "data", None),
+                type_before=type_dd.value,
+                provider_before=provider_before,
+            )
+            type_dd.value = device_type_code(raw_value)
+            apply_form_schema(source="type_change")
+            debug_device_form(
+                "on_type_change:after",
+                source="type_change",
+                type=type_dd.value,
+                provider_before=provider_before,
+                provider_after=provider_dd.value,
+                protocol=protocol_tf.value,
+                channel=channel_tf.value,
+                note=note_text.value,
+            )
+            update_dynamic_form_controls()
 
+        def on_provider_change(e):
+            provider_before = provider_dd.value
+            raw_value = event_value(e, provider_dd.value)
+            selected_provider = resolve_provider_code(raw_value)
+            debug_device_form(
+                "on_provider_change:before",
+                source="provider_change",
+                type=type_dd.value,
+                e_control_value=getattr(getattr(e, "control", None), "value", None),
+                e_data=getattr(e, "data", None),
+                provider_before=provider_before,
+                raw_value=raw_value,
+                selected_provider=selected_provider,
+            )
+            provider_dd.value = selected_provider
+            apply_form_schema(preferred_provider=selected_provider, source="provider_change")
+            debug_device_form(
+                "on_provider_change:after",
+                source="provider_change",
+                type=type_dd.value,
+                provider_before=provider_before,
+                provider_after=provider_dd.value,
+                protocol=protocol_tf.value,
+                channel=channel_tf.value,
+                note=note_text.value,
+            )
+            update_dynamic_form_controls()
+
+        type_dd.on_change = on_type_change
         provider_dd.on_change = on_provider_change
+        type_dd.on_select = on_type_change
+        provider_dd.on_select = on_provider_change
+        apply_form_schema(preferred_provider=provider_key, source="init")
 
         def test_connection(_):
             try:
@@ -390,7 +754,7 @@ def main(page: ft.Page):
                     "post",
                     "/api/devices/validate-connection",
                     {
-                        "provider": provider_dd.value or "mock",
+                        "provider": resolve_provider_code(provider_dd.value),
                         "protocol": (protocol_tf.value or "manual").strip(),
                         "connection": collect_connection(),
                     },
@@ -414,8 +778,8 @@ def main(page: ft.Page):
                     "roomId": int(room_dd.value) if room_dd.value else None,
                     "room": (new_room_tf.value or "").strip() or None,
                     "isOn": bool(is_on_sw.value),
-                    "type": type_dd.value or "Другое",
-                    "provider": provider_dd.value or "mock",
+                    "type": device_type_code(type_dd.value),
+                    "provider": resolve_provider_code(provider_dd.value),
                     "protocol": (protocol_tf.value or "manual").strip(),
                     "channel": (channel_tf.value or "local").strip(),
                     "externalId": (external_id_tf.value or "").strip(),
@@ -423,6 +787,7 @@ def main(page: ft.Page):
                     "model": (model_tf.value or "").strip(),
                     "connection": collect_connection(),
                 }
+                print("[device-save] payload=", payload, flush=True)
                 if editing:
                     created = api_request("put", f"/api/devices/{device['id']}", payload)
                     message = "Устройство обновлено"
@@ -436,6 +801,14 @@ def main(page: ft.Page):
                 status_message = created.get("connectionMessage") if isinstance(created, dict) else ""
                 show_message(f"{message}. Статус: {status or 'unknown'} {status_message or ''}".strip())
             except Exception as ex:
+                print("[device-save:error]", repr(ex), flush=True)
+                form_status_text.value = str(ex)
+                form_status_text.visible = True
+                test_result.value = str(ex)
+                try:
+                    dialog.update()
+                except Exception:
+                    page.update()
                 show_message(str(ex))
 
         dialog = ft.AlertDialog(
@@ -455,10 +828,8 @@ def main(page: ft.Page):
                         is_on_sw,
                         T("Параметры подключения", weight=ft.FontWeight.BOLD),
                         note_text,
-                        ft.Row(spacing=10, controls=[host_tf, port_tf]),
-                        ft.Row(spacing=10, controls=[url_tf, path_tf]),
-                        ft.Row(spacing=10, controls=[topic_tf, username_tf]),
-                        ft.Row(spacing=10, controls=[password_tf, token_tf]),
+                        form_status_text,
+                        connection_fields_column,
                         test_result,
                     ],
                 ),
@@ -951,6 +1322,13 @@ def main(page: ft.Page):
         device_cards = []
         for device in data["devices"]:
             room_dd = dropdown(value=str(device.get("roomId")) if device.get("roomId") is not None else None, options=room_options(), width=220)
+            action_buttons = []
+            if device_type_capabilities(device.get("type")).get("canToggle", True):
+                action_buttons.append(ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=lambda e, device_id=device["id"]: toggle_device(device_id)))
+            action_buttons.extend([
+                ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda e, d=device: open_device_dialog(d)),
+                ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство")))),
+            ])
             device_cards.append(
                 card(
                     ft.Row(
@@ -961,7 +1339,7 @@ def main(page: ft.Page):
                                 controls=[
                                     T(str(device.get("name", "Устройство")), size=18, weight=ft.FontWeight.BOLD),
                                     TM(f"ID: {device.get('externalId', '—')} · Комната: {device.get('room', 'Не указана')}", size=12),
-                                    TM(f"Тип: {device.get('type', 'Другое')} · {provider_title(device.get('provider'))}", size=12),
+                                    TM(f"Тип: {device_type_title(device.get('type'))} · {provider_title(device.get('provider'))}", size=12),
                                     TM(f"Протокол: {device.get('protocol', 'manual')} · Канал: {device.get('channel', 'local')}", size=12),
                                     TM(device.get("connectionMessage") or "", size=12),
                                 ],
@@ -978,11 +1356,7 @@ def main(page: ft.Page):
                     TM(f"Последняя проверка: {fmt_dt(device.get('lastConnectionCheckAt'))} · Последний сигнал: {fmt_dt(device.get('lastSeenAt'))}"),
                     ft.Row(
                         spacing=10,
-                        controls=[
-                            ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=lambda e, device_id=device["id"]: toggle_device(device_id)),
-                            ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda e, d=device: open_device_dialog(d)),
-                            ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство")))),
-                        ],
+                        controls=action_buttons,
                     ),
                     ft.Row(
                         spacing=10,
@@ -1230,7 +1604,7 @@ def main(page: ft.Page):
             controls=[
                 T("Настройки", size=22, weight=ft.FontWeight.BOLD),
                 card(T("Интерфейс", weight=ft.FontWeight.BOLD), dark_sw, ft.ElevatedButton("Сохранить", on_click=save_settings)),
-                card(T("Подключение к API", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}"), TM("Основной backend должен быть запущен из backend/CalHouse.Api"), TM("Flet UI работает поверх ASP.NET Core API, а не через отдельный python_api слой")),
+                card(T("Подключение к API", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}"), TM("backend из backend/CalHouse.Api")),
             ],
         )
 
