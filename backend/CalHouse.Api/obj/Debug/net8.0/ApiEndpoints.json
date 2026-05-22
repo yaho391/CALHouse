@@ -33,7 +33,88 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_6",
+    "RelativePath": "api/device-catalog/form-schema",
+    "HttpMethod": "GET",
+    "IsController": false,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "typeCode",
+        "Type": "System.String",
+        "IsRequired": true
+      },
+      {
+        "Name": "providerCode",
+        "Type": "System.String",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": [
+      {
+        "Type": "System.Void",
+        "MediaTypes": [],
+        "StatusCode": 200
+      }
+    ]
+  },
+  {
+    "ContainingType": "Program\u002B\u003C\u003Ec",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_4",
+    "RelativePath": "api/device-catalog/providers",
+    "HttpMethod": "GET",
+    "IsController": false,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": [
+      {
+        "Type": "System.Void",
+        "MediaTypes": [],
+        "StatusCode": 200
+      }
+    ]
+  },
+  {
+    "ContainingType": "Program\u002B\u003C\u003Ec",
     "Method": "\u003C\u003CMain\u003E$\u003Eb__0_3",
+    "RelativePath": "api/device-catalog/types",
+    "HttpMethod": "GET",
+    "IsController": false,
+    "Order": 0,
+    "Parameters": [],
+    "ReturnTypes": [
+      {
+        "Type": "System.Void",
+        "MediaTypes": [],
+        "StatusCode": 200
+      }
+    ]
+  },
+  {
+    "ContainingType": "Program\u002B\u003C\u003Ec",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_5",
+    "RelativePath": "api/device-catalog/types/{typeCode}/providers",
+    "HttpMethod": "GET",
+    "IsController": false,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "typeCode",
+        "Type": "System.String",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": [
+      {
+        "Type": "System.Void",
+        "MediaTypes": [],
+        "StatusCode": 200
+      }
+    ]
+  },
+  {
+    "ContainingType": "Program\u002B\u003C\u003Ec",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_7",
     "RelativePath": "api/devices",
     "HttpMethod": "GET",
     "IsController": false,
@@ -55,7 +136,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_5",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_9",
     "RelativePath": "api/devices",
     "HttpMethod": "POST",
     "IsController": false,
@@ -77,7 +158,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_4",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_8",
     "RelativePath": "api/devices/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -99,7 +180,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_6",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_10",
     "RelativePath": "api/devices/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -126,7 +207,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_9",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_13",
     "RelativePath": "api/devices/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -148,7 +229,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_8",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_12",
     "RelativePath": "api/devices/{id:int}/room",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -175,7 +256,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_7",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_11",
     "RelativePath": "api/devices/{id:int}/toggle",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -197,7 +278,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_10",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_14",
     "RelativePath": "api/devices/validate-connection",
     "HttpMethod": "POST",
     "IsController": false,
@@ -219,7 +300,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_11",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_15",
     "RelativePath": "api/events",
     "HttpMethod": "POST",
     "IsController": false,
@@ -241,7 +322,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_40",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_44",
     "RelativePath": "api/logs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -263,7 +344,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_12",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_16",
     "RelativePath": "api/rooms",
     "HttpMethod": "GET",
     "IsController": false,
@@ -279,7 +360,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_15",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_19",
     "RelativePath": "api/rooms",
     "HttpMethod": "POST",
     "IsController": false,
@@ -301,7 +382,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_13",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_17",
     "RelativePath": "api/rooms/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -323,7 +404,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_16",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_20",
     "RelativePath": "api/rooms/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -350,7 +431,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_17",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_21",
     "RelativePath": "api/rooms/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -372,7 +453,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_14",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_18",
     "RelativePath": "api/rooms/{id:int}/devices",
     "HttpMethod": "GET",
     "IsController": false,
@@ -394,7 +475,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_25",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_29",
     "RelativePath": "api/rules",
     "HttpMethod": "GET",
     "IsController": false,
@@ -410,7 +491,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_28",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_32",
     "RelativePath": "api/rules",
     "HttpMethod": "POST",
     "IsController": false,
@@ -432,7 +513,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_26",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_30",
     "RelativePath": "api/rules/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -454,7 +535,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_29",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_33",
     "RelativePath": "api/rules/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -481,7 +562,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_31",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_35",
     "RelativePath": "api/rules/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -503,7 +584,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_30",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_34",
     "RelativePath": "api/rules/{id:int}/enabled",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -530,7 +611,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_27",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_31",
     "RelativePath": "api/rules/{id:int}/runs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -557,7 +638,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_18",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_22",
     "RelativePath": "api/scenes",
     "HttpMethod": "GET",
     "IsController": false,
@@ -573,7 +654,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_21",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_25",
     "RelativePath": "api/scenes",
     "HttpMethod": "POST",
     "IsController": false,
@@ -595,7 +676,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_19",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_23",
     "RelativePath": "api/scenes/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -617,7 +698,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_22",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_26",
     "RelativePath": "api/scenes/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -644,7 +725,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_23",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_27",
     "RelativePath": "api/scenes/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -666,7 +747,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_24",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_28",
     "RelativePath": "api/scenes/{id:int}/run",
     "HttpMethod": "POST",
     "IsController": false,
@@ -688,7 +769,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_20",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_24",
     "RelativePath": "api/scenes/{id:int}/runs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -715,7 +796,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_32",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_36",
     "RelativePath": "api/schedules",
     "HttpMethod": "GET",
     "IsController": false,
@@ -731,7 +812,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_35",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_39",
     "RelativePath": "api/schedules",
     "HttpMethod": "POST",
     "IsController": false,
@@ -753,7 +834,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_33",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_37",
     "RelativePath": "api/schedules/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -775,7 +856,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_36",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_40",
     "RelativePath": "api/schedules/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -802,7 +883,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_39",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_43",
     "RelativePath": "api/schedules/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -824,7 +905,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_37",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_41",
     "RelativePath": "api/schedules/{id:int}/enabled",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -851,7 +932,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_34",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_38",
     "RelativePath": "api/schedules/{id:int}/runs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -878,7 +959,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_38",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_42",
     "RelativePath": "api/schedules/run-due",
     "HttpMethod": "POST",
     "IsController": false,

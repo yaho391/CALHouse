@@ -1,0 +1,14 @@
+C:\Users\pavuk\Documents\GitHub\CALHouse\CALHouse_Test.py:132: DeprecationWarning: all() is deprecated since version 0.80.0 and will be removed in version 0.83.0. Use Border.all() instead.
+  border=ft.border.all(1, c("border")),
+C:\Users\pavuk\Documents\GitHub\CALHouse\CALHouse_Test.py:1252: DeprecationWarning: ElevatedButton is deprecated since version 0.80.0 and will be removed in version 1.0. Use Button instead.
+  ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()),
+C:\Users\pavuk\Documents\GitHub\CALHouse\CALHouse_Test.py:403: DeprecationWarning: all() is deprecated since version 0.80.0 and will be removed in version 0.83.0. Use Border.all() instead.
+  border=ft.border.all(1, c("border")),
+C:\Users\pavuk\Documents\GitHub\CALHouse\CALHouse_Test.py:451: DeprecationWarning: symmetric() is deprecated since version 0.80.0 and will be removed in version 0.83.0. Use Padding.symmetric() instead
+  padding=ft.padding.symmetric(horizontal=12, vertical=6),
+C:\Users\pavuk\Documents\GitHub\CALHouse\CALHouse_Test.py:1286: DeprecationWarning: ElevatedButton is deprecated since version 0.80.0 and will be removed in version 1.0. Use Button instead.
+  action_buttons.append(ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=lambda e, device_id=device["id"]: toggle_device(device_id)))
+C:\Users\pavuk\Documents\GitHub\CALHouse\CALHouse_Test.py:1337: DeprecationWarning: ElevatedButton is deprecated since version 0.80.0 and will be removed in version 1.0. Use Button instead.
+  ft.Row(spacing=10, controls=[ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+C:\Users\pavuk\Documents\GitHub\CALHouse\CALHouse_Test.py:799: DeprecationWarning: ElevatedButton is deprecated since version 0.80.0 and will be removed in version 1.0. Use Button instead.
+  ft.ElevatedButton("Сохранить", on_click=save),

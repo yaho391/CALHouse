@@ -49,7 +49,8 @@ public partial class DeviceStore
 
     public object ValidateConnection(string? provider, string? protocol, Dictionary<string, string>? connection)
     {
-        var result = ValidateConnectionInternal(NormalizeOptional(provider, "mock"), NormalizeOptional(protocol, InferProtocol(provider)), NormalizeConnection(connection));
+        var cleanProvider = _catalog.NormalizeProviderCode(provider);
+        var result = ValidateConnectionInternal(cleanProvider, NormalizeOptional(protocol, _catalog.InferProtocol(cleanProvider)), NormalizeConnection(connection));
         return new
         {
             ok = result.Ok,
@@ -644,8 +645,8 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
 
     private ConnectionValidationResult ValidateConnectionInternal(string provider, string protocol, Dictionary<string, string> connection)
     {
-        provider = NormalizeOptional(provider, "mock").ToLowerInvariant();
-        protocol = NormalizeOptional(protocol, InferProtocol(provider)).ToLowerInvariant();
+        provider = _catalog.NormalizeProviderCode(provider);
+        protocol = NormalizeOptional(protocol, _catalog.InferProtocol(provider)).ToLowerInvariant();
 
         if (provider == "mock" || protocol == "manual")
         {
@@ -740,8 +741,8 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             "shelly" or "tasmota" => ["host"],
             "homeassistant" => ["url", "token", "entity_id"],
             "mqtt" or "zigbee2mqtt" => ["host", "port", "topic"],
-            "camera" or "custom" => ["host", "port"],
-            "http" => ["url"],
+            "camera" or "camera_rtsp" or "custom" or "custom_tcp" => ["host", "port"],
+            "http" or "custom_http" => ["url"],
             _ when protocol is "http" or "https" => ["url"],
             _ when protocol is "mqtt" or "tcp" or "rtsp" => ["host", "port"],
             _ => Array.Empty<string>(),
@@ -805,10 +806,10 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
     {
         return NormalizeOptional(provider, "mock").Trim().ToLowerInvariant() switch
         {
-            "shelly" or "tasmota" or "homeassistant" or "http" => "http",
+            "shelly" or "tasmota" or "homeassistant" or "http" or "custom_http" => "http",
             "mqtt" or "zigbee2mqtt" => "mqtt",
-            "camera" => "rtsp",
-            "custom" => "tcp",
+            "camera" or "camera_rtsp" => "rtsp",
+            "custom" or "custom_tcp" => "tcp",
             _ => "manual",
         };
     }

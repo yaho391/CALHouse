@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "GpjZlzk/B74=",
+  "dgSpecHash": "quVPeZcLcpo=",
   "success": true,
-  "projectFilePath": "C:\\Users\\pavuk\\Desktop\\CALHouse_fixed_project\\backend\\CalHouse.Api\\CalHouse.Api.csproj",
+  "projectFilePath": "C:\\Users\\pavuk\\Documents\\GitHub\\CALHouse\\backend\\CalHouse.Api\\CalHouse.Api.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\pavuk\\.nuget\\packages\\microsoft.data.sqlite\\8.0.11\\microsoft.data.sqlite.8.0.11.nupkg.sha512",
     "C:\\Users\\pavuk\\.nuget\\packages\\microsoft.data.sqlite.core\\8.0.11\\microsoft.data.sqlite.core.8.0.11.nupkg.sha512",

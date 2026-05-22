@@ -29,6 +29,82 @@
         }
       }
     },
+    "/api/device-catalog/types": {
+      "get": {
+        "tags": [
+          "CalHouse.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/device-catalog/providers": {
+      "get": {
+        "tags": [
+          "CalHouse.Api"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/device-catalog/types/{typeCode}/providers": {
+      "get": {
+        "tags": [
+          "CalHouse.Api"
+        ],
+        "parameters": [
+          {
+            "name": "typeCode",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
+    "/api/device-catalog/form-schema": {
+      "get": {
+        "tags": [
+          "CalHouse.Api"
+        ],
+        "parameters": [
+          {
+            "name": "typeCode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "providerCode",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK"
+          }
+        }
+      }
+    },
     "/api/devices": {
       "get": {
         "tags": [

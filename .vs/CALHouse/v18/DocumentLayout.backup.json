@@ -1,9 +1,9 @@
 {
   "Version": 1,
-  "WorkspaceRootPath": "C:\\Users\\pavuk\\source\\repos\\CALHouse-main-with-sln\\",
+  "WorkspaceRootPath": "C:\\Users\\pavuk\\Documents\\GitHub\\CALHouse\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{5F4A5D69-9F8E-4A8E-8D6D-8B0BBA2118D1}|backend\\CalHouse.Api\\CalHouse.Api.csproj|c:\\users\\pavuk\\source\\repos\\calhouse-main-with-sln\\backend\\calhouse.api\\infrastructure\\apiproblemexception.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
+      "AbsoluteMoniker": "D:0:0:{5F4A5D69-9F8E-4A8E-8D6D-8B0BBA2118D1}|backend\\CalHouse.Api\\CalHouse.Api.csproj|c:\\users\\pavuk\\documents\\github\\calhouse\\backend\\calhouse.api\\infrastructure\\apiproblemexception.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}",
       "RelativeMoniker": "D:0:0:{5F4A5D69-9F8E-4A8E-8D6D-8B0BBA2118D1}|backend\\CalHouse.Api\\CalHouse.Api.csproj|solutionrelative:backend\\calhouse.api\\infrastructure\\apiproblemexception.cs||{A6C744A8-0E4A-4FC6-886A-064283054674}"
     }
   ],
@@ -14,17 +14,25 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 0,
+          "SelectedChildIndex": 2,
           "Children": [
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{3ae79031-e1bc-11d0-8f78-00a0c9110057}"
+            },
+            {
+              "$type": "Bookmark",
+              "Name": "ST:0:0:{e1b7d1f8-9b3c-49b1-8f4f-bfc63a88835d}"
+            },
             {
               "$type": "Document",
               "DocumentIndex": 0,
               "Title": "ApiProblemException.cs",
-              "DocumentMoniker": "C:\\Users\\pavuk\\source\\repos\\CALHouse-main-with-sln\\backend\\CalHouse.Api\\Infrastructure\\ApiProblemException.cs",
+              "DocumentMoniker": "C:\\Users\\pavuk\\Documents\\GitHub\\CALHouse\\backend\\CalHouse.Api\\Infrastructure\\ApiProblemException.cs",
               "RelativeDocumentMoniker": "backend\\CalHouse.Api\\Infrastructure\\ApiProblemException.cs",
-              "ToolTip": "C:\\Users\\pavuk\\source\\repos\\CALHouse-main-with-sln\\backend\\CalHouse.Api\\Infrastructure\\ApiProblemException.cs",
+              "ToolTip": "C:\\Users\\pavuk\\Documents\\GitHub\\CALHouse\\backend\\CalHouse.Api\\Infrastructure\\ApiProblemException.cs",
               "RelativeToolTip": "backend\\CalHouse.Api\\Infrastructure\\ApiProblemException.cs",
-              "ViewState": "AgIAAAAAAAAAAAAAAAAAABAAAABXAAAAAAAAAA==",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAoAAAAfAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000738|",
               "WhenOpened": "2026-03-20T10:54:04.811Z",
               "EditorCaption": ""

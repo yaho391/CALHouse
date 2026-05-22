@@ -54,7 +54,7 @@ public class SceneStore
             {
                 Id = scenes.Count == 0 ? 1 : scenes.Max(s => s.Id) + 1,
                 Name = name.Trim(),
-                Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim(),
+                Description = string.IsNullOrWhiteSpace(description) ? string.Empty : description.Trim(),
                 Actions = actions
             };
 
@@ -76,7 +76,7 @@ public class SceneStore
             }
 
             scene.Name = name.Trim();
-            scene.Description = string.IsNullOrWhiteSpace(description) ? null : description.Trim();
+            scene.Description = string.IsNullOrWhiteSpace(description) ? string.Empty : description.Trim();
             scene.Actions = actions;
             SaveScenes(scenes);
             return scene;
