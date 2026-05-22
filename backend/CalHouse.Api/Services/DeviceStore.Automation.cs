@@ -1,6 +1,8 @@
 using System.Globalization;
 using System.Net.Http;
 using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
 using CalHouse.Api.Infrastructure;
 using CalHouse.Api.Models;
 using Microsoft.Data.Sqlite;
@@ -770,6 +772,171 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         return string.Empty;
     }
 
+    private DeviceCommandResult ExecuteDeviceStateCommand(Device device, bool targetIsOn)
+    {
+        var provider = _catalog.NormalizeProviderCode(device.Provider);
+        var protocol = NormalizeOptional(device.Protocol, _catalog.InferProtocol(provider)).ToLowerInvariant();
+
+        if (provider == "custom_http")
+        {
+            return ExecuteCustomHttpCommand(device, protocol, targetIsOn);
+        }
+
+        if (provider == "mock" || protocol == "manual")
+        {
+            return new DeviceCommandResult(true, "connected", "Локальное устройство переключено без сетевой команды");
+        }
+
+        return new DeviceCommandResult(
+            true,
+            string.IsNullOrWhiteSpace(device.ConnectionStatus) ? "unknown" : device.ConnectionStatus,
+            string.IsNullOrWhiteSpace(device.ConnectionMessage) ? "Состояние устройства обновлено локально" : device.ConnectionMessage);
+    }
+
+    private static DeviceCommandResult ExecuteCustomHttpCommand(Device device, string protocol, bool targetIsOn)
+    {
+        try
+        {
+            var url = RenderDeviceCommandTemplate(BuildHttpUrl(device.Connection, protocol), targetIsOn);
+            var method = NormalizeOptional(GetConnectionValue(device.Connection, "method"), "POST").ToUpperInvariant();
+            var bodyTemplate = GetConnectionValue(device.Connection, "body_template");
+            var body = RenderDeviceCommandTemplate(bodyTemplate, targetIsOn);
+            var headersJson = GetConnectionValue(device.Connection, "headers");
+
+            if (!TryReadHttpHeaders(headersJson, out var headers, out var headersError))
+            {
+                return new DeviceCommandResult(false, "no_connection", headersError);
+            }
+
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            using var request = new HttpRequestMessage(new HttpMethod(method), url);
+
+            var contentType = headers.TryGetValue("Content-Type", out var requestedContentType)
+                ? requestedContentType
+                : "application/json";
+
+            foreach (var header in headers)
+            {
+                if (string.Equals(header.Key, "Content-Type", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                request.Headers.TryAddWithoutValidation(header.Key, header.Value);
+            }
+
+            if (!string.IsNullOrWhiteSpace(body) && method is not "GET" and not "HEAD")
+            {
+                request.Content = new StringContent(body, Encoding.UTF8, contentType);
+            }
+
+            using var response = client.Send(request);
+            var responseBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
+            var shortBody = Shorten(responseBody, 180);
+            var message = string.IsNullOrWhiteSpace(shortBody)
+                ? $"HTTP {method} {url} -> {(int)response.StatusCode}"
+                : $"HTTP {method} {url} -> {(int)response.StatusCode}: {shortBody}";
+
+            return new DeviceCommandResult(
+                response.IsSuccessStatusCode,
+                response.IsSuccessStatusCode ? "connected" : "no_connection",
+                message);
+        }
+        catch (Exception ex)
+        {
+            return new DeviceCommandResult(false, "no_connection", $"Не удалось выполнить HTTP-команду: {ex.Message}");
+        }
+    }
+
+    private void UpdateDeviceStateAfterCommand(SqliteConnection connection, SqliteTransaction transaction, Device device, bool targetIsOn, DeviceCommandResult commandResult)
+    {
+        var now = DateTime.UtcNow;
+        var updateDevice = connection.CreateCommand();
+        updateDevice.Transaction = transaction;
+        updateDevice.CommandText = @"
+UPDATE Devices
+SET IsOn = @isOn,
+    ConnectionStatus = @connectionStatus,
+    ConnectionMessage = @connectionMessage,
+    LastConnectionCheckAt = @lastConnectionCheckAt,
+    UpdatedAt = @updatedAt
+WHERE Id = @id;";
+        updateDevice.Parameters.AddWithValue("@isOn", commandResult.Ok ? (targetIsOn ? 1 : 0) : (device.IsOn ? 1 : 0));
+        updateDevice.Parameters.AddWithValue("@connectionStatus", commandResult.Status);
+        updateDevice.Parameters.AddWithValue("@connectionMessage", commandResult.Message);
+        updateDevice.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
+        updateDevice.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
+        updateDevice.Parameters.AddWithValue("@id", device.Id);
+        updateDevice.ExecuteNonQuery();
+    }
+
+    private static bool TryReadHttpHeaders(string headersJson, out Dictionary<string, string> headers, out string error)
+    {
+        headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        error = string.Empty;
+        if (string.IsNullOrWhiteSpace(headersJson))
+        {
+            return true;
+        }
+
+        try
+        {
+            using var document = JsonDocument.Parse(headersJson);
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                error = "HTTP headers должны быть JSON-объектом";
+                return false;
+            }
+
+            foreach (var property in document.RootElement.EnumerateObject())
+            {
+                var value = property.Value.ValueKind == JsonValueKind.String
+                    ? property.Value.GetString()
+                    : property.Value.GetRawText();
+                if (!string.IsNullOrWhiteSpace(property.Name) && !string.IsNullOrWhiteSpace(value))
+                {
+                    headers[property.Name] = value;
+                }
+            }
+            return true;
+        }
+        catch (JsonException ex)
+        {
+            error = $"HTTP headers должны быть валидным JSON: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static string RenderDeviceCommandTemplate(string template, bool targetIsOn)
+    {
+        if (string.IsNullOrEmpty(template))
+        {
+            return string.Empty;
+        }
+
+        var boolText = targetIsOn ? "true" : "false";
+        var stateText = targetIsOn ? "ON" : "OFF";
+        var stateLower = targetIsOn ? "on" : "off";
+        return template
+            .Replace("{{isOn}}", boolText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{isOn}", boolText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{{value}}", boolText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{value}", boolText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{{state}}", stateText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{state}", stateText, StringComparison.OrdinalIgnoreCase)
+            .Replace("{{stateLower}}", stateLower, StringComparison.OrdinalIgnoreCase)
+            .Replace("{stateLower}", stateLower, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string Shorten(string value, int maxLength)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return string.Empty;
+        }
+        var clean = value.Replace("\r", " ").Replace("\n", " ").Trim();
+        return clean.Length <= maxLength ? clean : clean[..maxLength] + "...";
+    }
+
     private static Dictionary<string, string> NormalizeConnection(Dictionary<string, string>? connection)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -1151,15 +1318,12 @@ WHERE Id = @id;";
             }
 
             var device = ReadDeviceOrThrow(connection, actionDeviceId.Value);
-            var updateDevice = connection.CreateCommand();
-            updateDevice.Transaction = transaction;
-            updateDevice.CommandText = "UPDATE Devices SET IsOn = @isOn, UpdatedAt = @updatedAt WHERE Id = @id;";
-            updateDevice.Parameters.AddWithValue("@isOn", actionTargetIsOn.Value ? 1 : 0);
-            updateDevice.Parameters.AddWithValue("@updatedAt", DateTime.UtcNow.ToString("O"));
-            updateDevice.Parameters.AddWithValue("@id", actionDeviceId.Value);
-            updateDevice.ExecuteNonQuery();
+            var commandResult = ExecuteDeviceStateCommand(device, actionTargetIsOn.Value);
+            UpdateDeviceStateAfterCommand(connection, transaction, device, actionTargetIsOn.Value, commandResult);
 
-            return ("completed", $"{prefix} установило устройство «{device.Name}» в состояние {(actionTargetIsOn.Value ? "ON" : "OFF")}");
+            return commandResult.Ok
+                ? ("completed", $"{prefix} установило устройство «{device.Name}» в состояние {(actionTargetIsOn.Value ? "ON" : "OFF")}. {commandResult.Message}")
+                : ("failed", $"{prefix} не смогло установить устройство «{device.Name}» в состояние {(actionTargetIsOn.Value ? "ON" : "OFF")}: {commandResult.Message}");
         }
 
         if (!actionSceneId.HasValue)
@@ -1403,4 +1567,6 @@ LIMIT @limit;";
     }
 
     private sealed record ConnectionValidationResult(bool Ok, string Status, string Message, Dictionary<string, string> Connection);
+
+    private sealed record DeviceCommandResult(bool Ok, string Status, string Message);
 }
