@@ -1350,19 +1350,23 @@ SELECT last_insert_rowid();";
         createRun.Parameters.AddWithValue("@message", $"{prefix} запустило сценарий");
         var runId = Convert.ToInt32((long)(createRun.ExecuteScalar() ?? 0));
 
+        var failures = new List<string>();
         foreach (var action in scene.Actions.OrderBy(x => x.SortOrder))
         {
-            var updateDevice = connection.CreateCommand();
-            updateDevice.Transaction = transaction;
-            updateDevice.CommandText = "UPDATE Devices SET IsOn = @isOn, UpdatedAt = @updatedAt WHERE Id = @deviceId;";
-            updateDevice.Parameters.AddWithValue("@isOn", action.TargetIsOn ? 1 : 0);
-            updateDevice.Parameters.AddWithValue("@updatedAt", DateTime.UtcNow.ToString("O"));
-            updateDevice.Parameters.AddWithValue("@deviceId", action.DeviceId);
-            updateDevice.ExecuteNonQuery();
+            var device = ReadDeviceOrThrow(connection, action.DeviceId);
+            var commandResult = ExecuteDeviceStateCommand(device, action.TargetIsOn);
+            UpdateDeviceStateAfterCommand(connection, transaction, device, action.TargetIsOn, commandResult);
+            if (!commandResult.Ok)
+            {
+                failures.Add($"{action.DeviceName}: {commandResult.Message}");
+            }
         }
 
         var completedAt = DateTime.UtcNow;
-        var message = $"{prefix} запустило сценарий «{scene.Name}»";
+        var runStatus = failures.Count == 0 ? "completed" : "failed";
+        var message = failures.Count == 0
+            ? $"{prefix} запустило сценарий «{scene.Name}»"
+            : $"{prefix} запустило сценарий «{scene.Name}» с ошибками: {string.Join("; ", failures)}";
 
         var finishRun = connection.CreateCommand();
         finishRun.Transaction = transaction;
@@ -1373,7 +1377,7 @@ SET CompletedAt = @completedAt,
     Message = @message
 WHERE Id = @id;";
         finishRun.Parameters.AddWithValue("@completedAt", completedAt.ToString("O"));
-        finishRun.Parameters.AddWithValue("@status", "completed");
+        finishRun.Parameters.AddWithValue("@status", runStatus);
         finishRun.Parameters.AddWithValue("@message", message);
         finishRun.Parameters.AddWithValue("@id", runId);
         finishRun.ExecuteNonQuery();
@@ -1388,13 +1392,13 @@ SET LastRunAt = @lastRunAt,
     UpdatedAt = @updatedAt
 WHERE Id = @sceneId;";
         updateScene.Parameters.AddWithValue("@lastRunAt", completedAt.ToString("O"));
-        updateScene.Parameters.AddWithValue("@lastRunStatus", "completed");
+        updateScene.Parameters.AddWithValue("@lastRunStatus", runStatus);
         updateScene.Parameters.AddWithValue("@lastRunMessage", message);
         updateScene.Parameters.AddWithValue("@updatedAt", completedAt.ToString("O"));
         updateScene.Parameters.AddWithValue("@sceneId", scene.Id);
         updateScene.ExecuteNonQuery();
 
-        return ("completed", message);
+        return (runStatus, message);
     }
 
     private List<AutomationRule> ReadRules(SqliteConnection connection, int? ruleId)
