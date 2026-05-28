@@ -1,5 +1,6 @@
 using System.Data;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using CalHouse.Api.Infrastructure;
 using CalHouse.Api.Models;
 using Microsoft.Data.Sqlite;
@@ -8,6 +9,16 @@ namespace CalHouse.Api.Services;
 
 public partial class DeviceStore
 {
+    private const int MaxNameLength = 120;
+    private const int MaxDescriptionLength = 1000;
+    private const int MaxShortTextLength = 120;
+    private const int MaxExternalIdLength = 100;
+    private const int MaxEventValueLength = 500;
+    private const int MaxConnectionTextLength = 8000;
+
+    private static readonly Regex ExternalIdPattern = new(@"^[A-Za-z0-9._:-]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+    private static readonly Regex CodePattern = new(@"^[A-Za-z0-9_.:-]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private readonly string _databasePath;
     private readonly string _legacyDevicesPath;
     private readonly DeviceCatalogService _catalog;
@@ -72,16 +83,16 @@ public partial class DeviceStore
         string? model,
         Dictionary<string, string>? connection)
     {
-        var cleanName = NormalizeRequired(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED");
+        var cleanName = NormalizeRequiredBounded(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED", MaxNameLength, "Название устройства слишком длинное", "DEVICE_NAME_TOO_LONG");
         var cleanType = NormalizeOptional(type, "Другое");
         var cleanProvider = _catalog.NormalizeProviderCode(provider);
         cleanType = _catalog.NormalizeDeviceTypeCode(cleanType);
         _catalog.EnsureProviderAllowed(cleanType, cleanProvider);
-        var cleanProtocol = NormalizeOptional(protocol, _catalog.InferProtocol(cleanProvider));
-        var cleanChannel = NormalizeOptional(channel, _catalog.InferChannel(cleanProvider, cleanProtocol));
-        var cleanExternalId = NormalizeRequired(externalId, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED");
-        var cleanManufacturer = NormalizeOptional(manufacturer, string.Empty);
-        var cleanModel = NormalizeOptional(model, string.Empty);
+        var cleanProtocol = NormalizeProtocol(NormalizeOptional(protocol, _catalog.InferProtocol(cleanProvider)));
+        var cleanChannel = NormalizeOptionalBounded(channel, _catalog.InferChannel(cleanProvider, cleanProtocol), MaxShortTextLength, "Канал устройства слишком длинный", "DEVICE_CHANNEL_TOO_LONG");
+        var cleanExternalId = NormalizeExternalId(externalId);
+        var cleanManufacturer = NormalizeOptionalBounded(manufacturer, string.Empty, MaxShortTextLength, "Производитель слишком длинный", "DEVICE_MANUFACTURER_TOO_LONG");
+        var cleanModel = NormalizeOptionalBounded(model, string.Empty, MaxShortTextLength, "Модель слишком длинная", "DEVICE_MODEL_TOO_LONG");
         var connectionData = NormalizeConnection(connection);
 
         lock (_sync)
@@ -146,16 +157,16 @@ SELECT last_insert_rowid();";
             var current = ReadDeviceOrThrow(db, id);
             using var transaction = db.BeginTransaction();
 
-            var finalName = string.IsNullOrWhiteSpace(name) ? current.Name : NormalizeRequired(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED");
+            var finalName = string.IsNullOrWhiteSpace(name) ? current.Name : NormalizeRequiredBounded(name, "Название устройства обязательно", "DEVICE_NAME_REQUIRED", MaxNameLength, "Название устройства слишком длинное", "DEVICE_NAME_TOO_LONG");
             var finalType = string.IsNullOrWhiteSpace(type) ? current.Type : NormalizeOptional(type, current.Type);
             var finalProvider = string.IsNullOrWhiteSpace(provider) ? _catalog.NormalizeProviderCode(current.Provider) : _catalog.NormalizeProviderCode(provider);
             finalType = _catalog.NormalizeDeviceTypeCode(finalType);
             _catalog.EnsureProviderAllowed(finalType, finalProvider);
-            var finalProtocol = protocol is null ? current.Protocol : NormalizeOptional(protocol, _catalog.InferProtocol(finalProvider));
-            var finalChannel = channel is null ? current.Channel : NormalizeOptional(channel, _catalog.InferChannel(finalProvider, finalProtocol));
-            var finalExternalId = string.IsNullOrWhiteSpace(externalId) ? current.ExternalId : NormalizeRequired(externalId, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED");
-            var finalManufacturer = manufacturer is null ? current.Manufacturer : NormalizeOptional(manufacturer, string.Empty);
-            var finalModel = model is null ? current.Model : NormalizeOptional(model, string.Empty);
+            var finalProtocol = protocol is null ? current.Protocol : NormalizeProtocol(NormalizeOptional(protocol, _catalog.InferProtocol(finalProvider)));
+            var finalChannel = channel is null ? current.Channel : NormalizeOptionalBounded(channel, _catalog.InferChannel(finalProvider, finalProtocol), MaxShortTextLength, "Канал устройства слишком длинный", "DEVICE_CHANNEL_TOO_LONG");
+            var finalExternalId = string.IsNullOrWhiteSpace(externalId) ? current.ExternalId : NormalizeExternalId(externalId);
+            var finalManufacturer = manufacturer is null ? current.Manufacturer : NormalizeOptionalBounded(manufacturer, string.Empty, MaxShortTextLength, "Производитель слишком длинный", "DEVICE_MANUFACTURER_TOO_LONG");
+            var finalModel = model is null ? current.Model : NormalizeOptionalBounded(model, string.Empty, MaxShortTextLength, "Модель слишком длинная", "DEVICE_MODEL_TOO_LONG");
             var finalConnection = connection is null ? current.Connection : NormalizeConnection(connection);
             var finalIsOn = isOn ?? current.IsOn;
             var finalRoomId = ResolveRoomId(db, transaction, roomId ?? current.RoomId, roomName, createIfMissing: !string.IsNullOrWhiteSpace(roomName));
@@ -356,8 +367,8 @@ ORDER BY r.Name;";
 
     public Room CreateRoom(string name, string? zone)
     {
-        var cleanName = NormalizeRequired(name, "Название комнаты обязательно", "ROOM_NAME_REQUIRED");
-        var cleanZone = NormalizeOptional(zone, string.Empty);
+        var cleanName = NormalizeRequiredBounded(name, "Название комнаты обязательно", "ROOM_NAME_REQUIRED", MaxNameLength, "Название комнаты слишком длинное", "ROOM_NAME_TOO_LONG");
+        var cleanZone = NormalizeOptionalBounded(zone, string.Empty, MaxShortTextLength, "Зона слишком длинная", "ROOM_ZONE_TOO_LONG");
 
         lock (_sync)
         {
@@ -384,8 +395,8 @@ SELECT last_insert_rowid();";
 
     public Room UpdateRoom(int id, string name, string? zone)
     {
-        var cleanName = NormalizeRequired(name, "Название комнаты обязательно", "ROOM_NAME_REQUIRED");
-        var cleanZone = NormalizeOptional(zone, string.Empty);
+        var cleanName = NormalizeRequiredBounded(name, "Название комнаты обязательно", "ROOM_NAME_REQUIRED", MaxNameLength, "Название комнаты слишком длинное", "ROOM_NAME_TOO_LONG");
+        var cleanZone = NormalizeOptionalBounded(zone, string.Empty, MaxShortTextLength, "Зона слишком длинная", "ROOM_ZONE_TOO_LONG");
 
         lock (_sync)
         {
@@ -461,8 +472,8 @@ SELECT last_insert_rowid();";
 
     public Scene CreateScene(string name, string? description, IReadOnlyList<SceneActionInput> actions)
     {
-        var cleanName = NormalizeRequired(name, "Название сценария обязательно", "SCENE_NAME_REQUIRED");
-        var cleanDescription = NormalizeOptional(description, string.Empty);
+        var cleanName = NormalizeRequiredBounded(name, "Название сценария обязательно", "SCENE_NAME_REQUIRED", MaxNameLength, "Название сценария слишком длинное", "SCENE_NAME_TOO_LONG");
+        var cleanDescription = NormalizeOptionalBounded(description, string.Empty, MaxDescriptionLength, "Описание сценария слишком длинное", "SCENE_DESCRIPTION_TOO_LONG");
         ValidateSceneActions(actions);
 
         lock (_sync)
@@ -494,8 +505,8 @@ SELECT last_insert_rowid();";
 
     public Scene UpdateScene(int id, string name, string? description, IReadOnlyList<SceneActionInput> actions)
     {
-        var cleanName = NormalizeRequired(name, "Название сценария обязательно", "SCENE_NAME_REQUIRED");
-        var cleanDescription = NormalizeOptional(description, string.Empty);
+        var cleanName = NormalizeRequiredBounded(name, "Название сценария обязательно", "SCENE_NAME_REQUIRED", MaxNameLength, "Название сценария слишком длинное", "SCENE_NAME_TOO_LONG");
+        var cleanDescription = NormalizeOptionalBounded(description, string.Empty, MaxDescriptionLength, "Описание сценария слишком длинное", "SCENE_DESCRIPTION_TOO_LONG");
         ValidateSceneActions(actions);
 
         lock (_sync)
@@ -1117,11 +1128,15 @@ WHERE sr.Id = @runId;";
     {
         if (roomId.HasValue)
         {
+            if (roomId.Value <= 0)
+            {
+                throw new ValidationProblemException("roomId должен быть положительным числом", "ROOM_ID_INVALID");
+            }
             _ = ReadRoomSummaryOrThrow(connection, roomId.Value);
             return roomId.Value;
         }
 
-        var cleanRoomName = NormalizeOptional(roomName, string.Empty);
+        var cleanRoomName = NormalizeOptionalBounded(roomName, string.Empty, MaxNameLength, "Название комнаты слишком длинное", "ROOM_NAME_TOO_LONG");
         if (string.IsNullOrWhiteSpace(cleanRoomName))
         {
             throw new ValidationProblemException("Нужно указать комнату или roomId", "ROOM_BINDING_REQUIRED");
@@ -1243,6 +1258,25 @@ VALUES (@ts, @severity, @source, @eventType, @message, @userId, @deviceId, @room
         {
             throw new ValidationProblemException("Добавьте хотя бы одно действие в сценарий", "SCENE_ACTIONS_REQUIRED");
         }
+
+        var sortOrders = new HashSet<int>();
+        foreach (var action in actions)
+        {
+            if (action.DeviceId <= 0)
+            {
+                throw new ValidationProblemException("В действии сценария нужно выбрать устройство", "SCENE_ACTION_DEVICE_REQUIRED");
+            }
+
+            if (action.SortOrder <= 0)
+            {
+                throw new ValidationProblemException("Порядок действия сценария должен быть положительным числом", "SCENE_ACTION_ORDER_INVALID");
+            }
+
+            if (!sortOrders.Add(action.SortOrder))
+            {
+                throw new ValidationProblemException("Порядок действий сценария не должен повторяться", "SCENE_ACTION_ORDER_DUPLICATE");
+            }
+        }
     }
 
     private void EnsureDevicesExist(SqliteConnection connection, IEnumerable<int> deviceIds)
@@ -1331,9 +1365,64 @@ VALUES (@ts, @severity, @source, @eventType, @message, @userId, @deviceId, @room
         return normalized;
     }
 
+    private static string NormalizeRequiredBounded(string? value, string requiredMessage, string requiredCode, int maxLength, string tooLongMessage, string tooLongCode)
+    {
+        var normalized = NormalizeRequired(value, requiredMessage, requiredCode);
+        if (normalized.Length > maxLength)
+        {
+            throw new ValidationProblemException($"{tooLongMessage}: максимум {maxLength} символов", tooLongCode);
+        }
+
+        return normalized;
+    }
+
     private static string NormalizeOptional(string? value, string fallback)
     {
         return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
+    }
+
+    private static string NormalizeOptionalBounded(string? value, string fallback, int maxLength, string tooLongMessage, string tooLongCode)
+    {
+        var normalized = NormalizeOptional(value, fallback);
+        if (normalized.Length > maxLength)
+        {
+            throw new ValidationProblemException($"{tooLongMessage}: максимум {maxLength} символов", tooLongCode);
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeExternalId(string? value)
+    {
+        var normalized = NormalizeRequiredBounded(value, "Идентификатор устройства обязателен", "DEVICE_EXTERNAL_ID_REQUIRED", MaxExternalIdLength, "Идентификатор устройства слишком длинный", "DEVICE_EXTERNAL_ID_TOO_LONG");
+        if (!ExternalIdPattern.IsMatch(normalized))
+        {
+            throw new ValidationProblemException("Идентификатор устройства может содержать только латиницу, цифры, точку, дефис, подчёркивание и двоеточие", "DEVICE_EXTERNAL_ID_INVALID");
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeProtocol(string value)
+    {
+        var normalized = NormalizeRequiredBounded(value, "Протокол обязателен", "DEVICE_PROTOCOL_REQUIRED", MaxShortTextLength, "Протокол слишком длинный", "DEVICE_PROTOCOL_TOO_LONG").ToLowerInvariant();
+        if (!SupportedProtocols.Contains(normalized, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ValidationProblemException("Неподдерживаемый протокол устройства", "DEVICE_PROTOCOL_INVALID");
+        }
+
+        return normalized;
+    }
+
+    private static string NormalizeCodeValue(string? value, string requiredMessage, string requiredCode, int maxLength, string invalidMessage, string invalidCode)
+    {
+        var normalized = NormalizeRequiredBounded(value, requiredMessage, requiredCode, maxLength, invalidMessage, invalidCode);
+        if (!CodePattern.IsMatch(normalized))
+        {
+            throw new ValidationProblemException(invalidMessage, invalidCode);
+        }
+
+        return normalized;
     }
 
     private static string InferDeviceType(string? name)
