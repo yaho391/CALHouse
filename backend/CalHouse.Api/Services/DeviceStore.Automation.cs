@@ -52,7 +52,7 @@ public partial class DeviceStore
     public object ValidateConnection(string? provider, string? protocol, Dictionary<string, string>? connection)
     {
         var cleanProvider = _catalog.NormalizeProviderCode(provider);
-        var result = ValidateConnectionInternal(cleanProvider, NormalizeOptional(protocol, _catalog.InferProtocol(cleanProvider)), NormalizeConnection(connection));
+        var result = ValidateConnectionInternal(cleanProvider, NormalizeProtocol(NormalizeOptional(protocol, _catalog.InferProtocol(cleanProvider))), NormalizeConnection(connection));
         return new
         {
             ok = result.Ok,
@@ -95,11 +95,11 @@ public partial class DeviceStore
         bool? actionTargetIsOn,
         int? actionSceneId)
     {
-        var cleanName = NormalizeRequired(name, "Название правила обязательно", "RULE_NAME_REQUIRED");
-        var cleanDescription = NormalizeOptional(description, string.Empty);
-        var cleanEventType = NormalizeRequired(eventType, "Тип события обязателен", "RULE_EVENT_TYPE_REQUIRED");
+        var cleanName = NormalizeRequiredBounded(name, "Название правила обязательно", "RULE_NAME_REQUIRED", MaxNameLength, "Название правила слишком длинное", "RULE_NAME_TOO_LONG");
+        var cleanDescription = NormalizeOptionalBounded(description, string.Empty, MaxDescriptionLength, "Описание правила слишком длинное", "RULE_DESCRIPTION_TOO_LONG");
+        var cleanEventType = NormalizeCodeValue(eventType, "Тип события обязателен", "RULE_EVENT_TYPE_REQUIRED", MaxShortTextLength, "Тип события может содержать только латиницу, цифры, точку, дефис, подчёркивание и двоеточие", "RULE_EVENT_TYPE_INVALID");
         var cleanOperator = NormalizeRequired(comparisonOperator, "Оператор сравнения обязателен", "RULE_OPERATOR_REQUIRED");
-        var cleanCompareValue = NormalizeRequired(compareValue, "Значение условия обязательно", "RULE_COMPARE_VALUE_REQUIRED");
+        var cleanCompareValue = NormalizeRequiredBounded(compareValue, "Значение условия обязательно", "RULE_COMPARE_VALUE_REQUIRED", MaxEventValueLength, "Значение условия слишком длинное", "RULE_COMPARE_VALUE_TOO_LONG");
         var cleanActionKind = NormalizeRequired(actionKind, "Тип действия обязателен", "RULE_ACTION_KIND_REQUIRED");
 
         lock (_sync)
@@ -107,8 +107,9 @@ public partial class DeviceStore
             using var db = OpenConnection();
             EnsureAutomationSchema(db);
             EnsureRuleNameIsUnique(db, cleanName, null);
+            EnsurePositiveId(triggerDeviceId, "Источник события выбран некорректно", "RULE_TRIGGER_DEVICE_INVALID");
             _ = ReadDeviceOrThrow(db, triggerDeviceId);
-            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionSceneId);
+            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionTargetIsOn, actionSceneId);
             ValidateRuleOperator(cleanOperator);
 
             using var transaction = db.BeginTransaction();
@@ -156,11 +157,11 @@ SELECT last_insert_rowid();";
         bool? actionTargetIsOn,
         int? actionSceneId)
     {
-        var cleanName = NormalizeRequired(name, "Название правила обязательно", "RULE_NAME_REQUIRED");
-        var cleanDescription = NormalizeOptional(description, string.Empty);
-        var cleanEventType = NormalizeRequired(eventType, "Тип события обязателен", "RULE_EVENT_TYPE_REQUIRED");
+        var cleanName = NormalizeRequiredBounded(name, "Название правила обязательно", "RULE_NAME_REQUIRED", MaxNameLength, "Название правила слишком длинное", "RULE_NAME_TOO_LONG");
+        var cleanDescription = NormalizeOptionalBounded(description, string.Empty, MaxDescriptionLength, "Описание правила слишком длинное", "RULE_DESCRIPTION_TOO_LONG");
+        var cleanEventType = NormalizeCodeValue(eventType, "Тип события обязателен", "RULE_EVENT_TYPE_REQUIRED", MaxShortTextLength, "Тип события может содержать только латиницу, цифры, точку, дефис, подчёркивание и двоеточие", "RULE_EVENT_TYPE_INVALID");
         var cleanOperator = NormalizeRequired(comparisonOperator, "Оператор сравнения обязателен", "RULE_OPERATOR_REQUIRED");
-        var cleanCompareValue = NormalizeRequired(compareValue, "Значение условия обязательно", "RULE_COMPARE_VALUE_REQUIRED");
+        var cleanCompareValue = NormalizeRequiredBounded(compareValue, "Значение условия обязательно", "RULE_COMPARE_VALUE_REQUIRED", MaxEventValueLength, "Значение условия слишком длинное", "RULE_COMPARE_VALUE_TOO_LONG");
         var cleanActionKind = NormalizeRequired(actionKind, "Тип действия обязателен", "RULE_ACTION_KIND_REQUIRED");
 
         lock (_sync)
@@ -169,8 +170,9 @@ SELECT last_insert_rowid();";
             EnsureAutomationSchema(db);
             _ = GetRule(id);
             EnsureRuleNameIsUnique(db, cleanName, id);
+            EnsurePositiveId(triggerDeviceId, "Источник события выбран некорректно", "RULE_TRIGGER_DEVICE_INVALID");
             _ = ReadDeviceOrThrow(db, triggerDeviceId);
-            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionSceneId);
+            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionTargetIsOn, actionSceneId);
             ValidateRuleOperator(cleanOperator);
 
             using var transaction = db.BeginTransaction();
@@ -264,8 +266,9 @@ WHERE Id = @id;";
 
     public DeviceEventResult ProcessIncomingEvent(int? deviceId, string? deviceExternalId, string eventType, string value, string? message = null)
     {
-        var cleanEventType = NormalizeRequired(eventType, "Тип события обязателен", "EVENT_TYPE_REQUIRED");
-        var cleanValue = NormalizeRequired(value, "Значение события обязательно", "EVENT_VALUE_REQUIRED");
+        var cleanEventType = NormalizeCodeValue(eventType, "Тип события обязателен", "EVENT_TYPE_REQUIRED", MaxShortTextLength, "Тип события может содержать только латиницу, цифры, точку, дефис, подчёркивание и двоеточие", "EVENT_TYPE_INVALID");
+        var cleanValue = NormalizeRequiredBounded(value, "Значение события обязательно", "EVENT_VALUE_REQUIRED", MaxEventValueLength, "Значение события слишком длинное", "EVENT_VALUE_TOO_LONG");
+        var cleanMessage = NormalizeOptionalBounded(message, string.Empty, MaxDescriptionLength, "Сообщение события слишком длинное", "EVENT_MESSAGE_TOO_LONG");
 
         lock (_sync)
         {
@@ -280,7 +283,7 @@ WHERE Id = @id;";
             touchDevice.CommandText = "UPDATE Devices SET LastSeenAt = @lastSeenAt, ConnectionStatus = @connectionStatus, ConnectionMessage = @connectionMessage, UpdatedAt = @updatedAt WHERE Id = @id;";
             touchDevice.Parameters.AddWithValue("@lastSeenAt", now.ToString("O"));
             touchDevice.Parameters.AddWithValue("@connectionStatus", "connected");
-            touchDevice.Parameters.AddWithValue("@connectionMessage", string.IsNullOrWhiteSpace(message) ? $"Получено событие {cleanEventType}" : message);
+            touchDevice.Parameters.AddWithValue("@connectionMessage", string.IsNullOrWhiteSpace(cleanMessage) ? $"Получено событие {cleanEventType}" : cleanMessage);
             touchDevice.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
             touchDevice.Parameters.AddWithValue("@id", sourceDevice.Id);
             touchDevice.ExecuteNonQuery();
@@ -340,14 +343,14 @@ WHERE Id = @id;";
         string? description,
         bool isEnabled,
         string timeOfDay,
-        IReadOnlyList<int> daysOfWeek,
+        IReadOnlyList<int>? daysOfWeek,
         string actionKind,
         int? actionDeviceId,
         bool? actionTargetIsOn,
         int? actionSceneId)
     {
-        var cleanName = NormalizeRequired(name, "Название расписания обязательно", "SCHEDULE_NAME_REQUIRED");
-        var cleanDescription = NormalizeOptional(description, string.Empty);
+        var cleanName = NormalizeRequiredBounded(name, "Название расписания обязательно", "SCHEDULE_NAME_REQUIRED", MaxNameLength, "Название расписания слишком длинное", "SCHEDULE_NAME_TOO_LONG");
+        var cleanDescription = NormalizeOptionalBounded(description, string.Empty, MaxDescriptionLength, "Описание расписания слишком длинное", "SCHEDULE_DESCRIPTION_TOO_LONG");
         var cleanTime = NormalizeTimeOfDay(timeOfDay);
         var cleanActionKind = NormalizeRequired(actionKind, "Тип действия обязателен", "SCHEDULE_ACTION_KIND_REQUIRED");
         var cleanDays = NormalizeDaysOfWeek(daysOfWeek);
@@ -357,7 +360,7 @@ WHERE Id = @id;";
             using var db = OpenConnection();
             EnsureAutomationSchema(db);
             EnsureScheduleNameIsUnique(db, cleanName, null);
-            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionSceneId);
+            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionTargetIsOn, actionSceneId);
 
             using var transaction = db.BeginTransaction();
             var now = DateTime.UtcNow;
@@ -394,14 +397,14 @@ SELECT last_insert_rowid();";
         string? description,
         bool isEnabled,
         string timeOfDay,
-        IReadOnlyList<int> daysOfWeek,
+        IReadOnlyList<int>? daysOfWeek,
         string actionKind,
         int? actionDeviceId,
         bool? actionTargetIsOn,
         int? actionSceneId)
     {
-        var cleanName = NormalizeRequired(name, "Название расписания обязательно", "SCHEDULE_NAME_REQUIRED");
-        var cleanDescription = NormalizeOptional(description, string.Empty);
+        var cleanName = NormalizeRequiredBounded(name, "Название расписания обязательно", "SCHEDULE_NAME_REQUIRED", MaxNameLength, "Название расписания слишком длинное", "SCHEDULE_NAME_TOO_LONG");
+        var cleanDescription = NormalizeOptionalBounded(description, string.Empty, MaxDescriptionLength, "Описание расписания слишком длинное", "SCHEDULE_DESCRIPTION_TOO_LONG");
         var cleanTime = NormalizeTimeOfDay(timeOfDay);
         var cleanActionKind = NormalizeRequired(actionKind, "Тип действия обязателен", "SCHEDULE_ACTION_KIND_REQUIRED");
         var cleanDays = NormalizeDaysOfWeek(daysOfWeek);
@@ -412,7 +415,7 @@ SELECT last_insert_rowid();";
             EnsureAutomationSchema(db);
             _ = GetSchedule(id);
             EnsureScheduleNameIsUnique(db, cleanName, id);
-            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionSceneId);
+            ValidateActionTarget(db, cleanActionKind, actionDeviceId, actionTargetIsOn, actionSceneId);
 
             using var transaction = db.BeginTransaction();
             var command = db.CreateCommand();
@@ -648,7 +651,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
     private ConnectionValidationResult ValidateConnectionInternal(string provider, string protocol, Dictionary<string, string> connection)
     {
         provider = _catalog.NormalizeProviderCode(provider);
-        protocol = NormalizeOptional(protocol, _catalog.InferProtocol(provider)).ToLowerInvariant();
+        protocol = NormalizeProtocol(NormalizeOptional(protocol, _catalog.InferProtocol(provider)));
 
         if (provider == "mock" || protocol == "manual")
         {
@@ -656,6 +659,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         }
 
         EnsureRequiredConnectionFields(provider, protocol, connection);
+        ValidateConnectionFields(provider, protocol, connection);
 
         if (protocol is "http" or "https")
         {
@@ -697,7 +701,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
     {
         var host = GetConnectionValue(connection, "host", "url");
         var portRaw = GetConnectionValue(connection, "port");
-        var port = int.TryParse(portRaw, out var parsed) ? parsed : 0;
+        var port = ParsePort(portRaw);
 
         try
         {
@@ -757,6 +761,143 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             {
                 throw new ValidationProblemException($"Поле подключения «{field}» обязательно", "DEVICE_CONNECTION_FIELD_REQUIRED");
             }
+        }
+    }
+
+    private static void ValidateConnectionFields(string provider, string protocol, Dictionary<string, string> connection)
+    {
+        ValidateConnectionTextLength(connection, "host", MaxShortTextLength, "Host / IP слишком длинный", "DEVICE_CONNECTION_HOST_TOO_LONG");
+        ValidateConnectionTextLength(connection, "url", MaxConnectionTextLength, "URL слишком длинный", "DEVICE_CONNECTION_URL_TOO_LONG");
+        ValidateConnectionTextLength(connection, "snapshot_url", MaxConnectionTextLength, "URL снимка слишком длинный", "DEVICE_CONNECTION_SNAPSHOT_URL_TOO_LONG");
+        ValidateConnectionTextLength(connection, "path", 512, "Path слишком длинный", "DEVICE_CONNECTION_PATH_TOO_LONG");
+        ValidateConnectionTextLength(connection, "topic", 256, "Topic слишком длинный", "DEVICE_CONNECTION_TOPIC_TOO_LONG");
+        ValidateConnectionTextLength(connection, "state_topic", 256, "Topic состояния слишком длинный", "DEVICE_CONNECTION_STATE_TOPIC_TOO_LONG");
+        ValidateConnectionTextLength(connection, "username", MaxShortTextLength, "Пользователь слишком длинный", "DEVICE_CONNECTION_USERNAME_TOO_LONG");
+        ValidateConnectionTextLength(connection, "password", 1000, "Пароль / ключ устройства слишком длинный", "DEVICE_CONNECTION_PASSWORD_TOO_LONG");
+        ValidateConnectionTextLength(connection, "device_key", 1000, "Пароль / ключ устройства слишком длинный", "DEVICE_CONNECTION_DEVICE_KEY_TOO_LONG");
+        ValidateConnectionTextLength(connection, "token", 2000, "Токен слишком длинный", "DEVICE_CONNECTION_TOKEN_TOO_LONG");
+        ValidateConnectionTextLength(connection, "entity_id", MaxShortTextLength, "Entity ID слишком длинный", "DEVICE_CONNECTION_ENTITY_ID_TOO_LONG");
+        ValidateConnectionTextLength(connection, "headers", MaxConnectionTextLength, "Заголовки JSON слишком длинные", "DEVICE_CONNECTION_HEADERS_TOO_LONG");
+        ValidateConnectionTextLength(connection, "body_template", MaxConnectionTextLength, "Шаблон body слишком длинный", "DEVICE_CONNECTION_BODY_TEMPLATE_TOO_LONG");
+        ValidateConnectionTextLength(connection, "payload_template", MaxConnectionTextLength, "Шаблон payload слишком длинный", "DEVICE_CONNECTION_PAYLOAD_TEMPLATE_TOO_LONG");
+
+        var host = GetConnectionValue(connection, "host");
+        if (!string.IsNullOrWhiteSpace(host))
+        {
+            ValidateHost(host);
+        }
+
+        var port = GetConnectionValue(connection, "port");
+        if (!string.IsNullOrWhiteSpace(port))
+        {
+            _ = ParsePort(port);
+        }
+
+        var url = GetConnectionValue(connection, "url");
+        if (!string.IsNullOrWhiteSpace(url))
+        {
+            ValidateUrl(url, protocol, "URL", "DEVICE_CONNECTION_URL_INVALID");
+        }
+
+        var snapshotUrl = GetConnectionValue(connection, "snapshot_url");
+        if (!string.IsNullOrWhiteSpace(snapshotUrl))
+        {
+            ValidateUrl(snapshotUrl, "http", "URL снимка", "DEVICE_CONNECTION_SNAPSHOT_URL_INVALID");
+        }
+
+        var method = GetConnectionValue(connection, "method");
+        if (!string.IsNullOrWhiteSpace(method))
+        {
+            ValidateHttpMethod(method);
+        }
+
+        var headers = GetConnectionValue(connection, "headers");
+        if (!TryReadHttpHeaders(headers, out _, out var headersError))
+        {
+            throw new ValidationProblemException(headersError, "DEVICE_CONNECTION_HEADERS_INVALID");
+        }
+
+        var entityId = GetConnectionValue(connection, "entity_id");
+        if (!string.IsNullOrWhiteSpace(entityId) && !entityId.Contains('.', StringComparison.Ordinal))
+        {
+            throw new ValidationProblemException("Entity ID должен быть в формате domain.object_id, например light.kitchen", "DEVICE_CONNECTION_ENTITY_ID_INVALID");
+        }
+
+        if (provider is "mqtt" or "zigbee2mqtt" || protocol == "mqtt")
+        {
+            ValidateMqttTopic(connection, "topic", required: true);
+            ValidateMqttTopic(connection, "state_topic", required: false);
+        }
+    }
+
+    private static void ValidateConnectionTextLength(Dictionary<string, string> connection, string key, int maxLength, string message, string code)
+    {
+        var value = GetConnectionValue(connection, key);
+        if (value.Length > maxLength)
+        {
+            throw new ValidationProblemException($"{message}: максимум {maxLength} символов", code);
+        }
+    }
+
+    private static void ValidateHost(string host)
+    {
+        if (host.Contains("://", StringComparison.Ordinal) || host.Contains('/') || host.Any(char.IsWhiteSpace) || host.Any(char.IsControl))
+        {
+            throw new ValidationProblemException("Host / IP должен быть именем хоста или IP без протокола, пути и пробелов", "DEVICE_CONNECTION_HOST_INVALID");
+        }
+    }
+
+    private static int ParsePort(string value)
+    {
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var port) || port is < 1 or > 65535)
+        {
+            throw new ValidationProblemException("Port должен быть числом от 1 до 65535", "DEVICE_CONNECTION_PORT_INVALID");
+        }
+
+        return port;
+    }
+
+    private static void ValidateUrl(string value, string protocol, string label, string code)
+    {
+        var sample = RenderDeviceCommandTemplate(value, true);
+        if (!sample.StartsWith("http", StringComparison.OrdinalIgnoreCase))
+        {
+            sample = $"{protocol}://{sample}";
+        }
+
+        if (!Uri.TryCreate(sample, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            throw new ValidationProblemException($"{label} должен быть абсолютным HTTP/HTTPS URL", code);
+        }
+    }
+
+    private static void ValidateHttpMethod(string value)
+    {
+        var method = value.Trim().ToUpperInvariant();
+        string[] allowed = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"];
+        if (!allowed.Contains(method, StringComparer.OrdinalIgnoreCase))
+        {
+            throw new ValidationProblemException("HTTP-метод должен быть одним из GET, POST, PUT, PATCH, DELETE, HEAD", "DEVICE_CONNECTION_METHOD_INVALID");
+        }
+    }
+
+    private static void ValidateMqttTopic(Dictionary<string, string> connection, string key, bool required)
+    {
+        var value = GetConnectionValue(connection, key);
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            if (required)
+            {
+                throw new ValidationProblemException($"Поле подключения «{key}» обязательно", "DEVICE_CONNECTION_FIELD_REQUIRED");
+            }
+            return;
+        }
+
+        if (value.Any(char.IsControl) || value.StartsWith('/') || value.EndsWith('/'))
+        {
+            throw new ValidationProblemException($"MQTT topic «{key}» не должен начинаться/заканчиваться slash и не должен содержать управляющие символы", "DEVICE_CONNECTION_TOPIC_INVALID");
         }
     }
 
@@ -889,11 +1030,22 @@ WHERE Id = @id;";
 
             foreach (var property in document.RootElement.EnumerateObject())
             {
+                if (string.IsNullOrWhiteSpace(property.Name) || property.Name.Any(char.IsWhiteSpace) || property.Name.Any(char.IsControl))
+                {
+                    error = "HTTP headers содержат некорректное имя заголовка";
+                    return false;
+                }
+
                 var value = property.Value.ValueKind == JsonValueKind.String
                     ? property.Value.GetString()
                     : property.Value.GetRawText();
-                if (!string.IsNullOrWhiteSpace(property.Name) && !string.IsNullOrWhiteSpace(value))
+                if (!string.IsNullOrWhiteSpace(value))
                 {
+                    if (value.Contains('\r') || value.Contains('\n'))
+                    {
+                        error = "HTTP headers не должны содержать переносы строк";
+                        return false;
+                    }
                     headers[property.Name] = value;
                 }
             }
@@ -951,6 +1103,16 @@ WHERE Id = @id;";
             var value = pair.Value?.Trim();
             if (!string.IsNullOrWhiteSpace(key) && !string.IsNullOrWhiteSpace(value))
             {
+                if (key.Length > MaxShortTextLength || key.Any(char.IsWhiteSpace) || key.Any(char.IsControl))
+                {
+                    throw new ValidationProblemException("Имя поля подключения некорректно", "DEVICE_CONNECTION_KEY_INVALID");
+                }
+
+                if (value.Length > MaxConnectionTextLength)
+                {
+                    throw new ValidationProblemException($"Значение поля подключения «{key}» слишком длинное: максимум {MaxConnectionTextLength} символов", "DEVICE_CONNECTION_VALUE_TOO_LONG");
+                }
+
                 result[key] = value;
             }
         }
@@ -1001,7 +1163,7 @@ WHERE Id = @id;";
         }
     }
 
-    private void ValidateActionTarget(SqliteConnection connection, string actionKind, int? actionDeviceId, int? actionSceneId)
+    private void ValidateActionTarget(SqliteConnection connection, string actionKind, int? actionDeviceId, bool? actionTargetIsOn, int? actionSceneId)
     {
         actionKind = actionKind.Trim().ToLowerInvariant();
         if (!SupportedActionKinds.Contains(actionKind))
@@ -1015,6 +1177,14 @@ WHERE Id = @id;";
             {
                 throw new ValidationProblemException("Нужно выбрать устройство для действия", "RULE_ACTION_DEVICE_REQUIRED");
             }
+            if (actionDeviceId.Value <= 0)
+            {
+                throw new ValidationProblemException("Устройство для действия выбрано некорректно", "RULE_ACTION_DEVICE_INVALID");
+            }
+            if (!actionTargetIsOn.HasValue)
+            {
+                throw new ValidationProblemException("Нужно выбрать целевое состояние устройства", "RULE_ACTION_STATE_REQUIRED");
+            }
             _ = ReadDeviceOrThrow(connection, actionDeviceId.Value);
             return;
         }
@@ -1023,7 +1193,19 @@ WHERE Id = @id;";
         {
             throw new ValidationProblemException("Нужно выбрать сценарий для действия", "RULE_ACTION_SCENE_REQUIRED");
         }
+        if (actionSceneId.Value <= 0)
+        {
+            throw new ValidationProblemException("Сценарий для действия выбран некорректно", "RULE_ACTION_SCENE_INVALID");
+        }
         _ = ReadScenes(connection, actionSceneId.Value, includeRuns: false).FirstOrDefault() ?? throw new NotFoundProblemException("Сценарий не найден", "SCENE_NOT_FOUND");
+    }
+
+    private static void EnsurePositiveId(int value, string message, string code)
+    {
+        if (value <= 0)
+        {
+            throw new ValidationProblemException(message, code);
+        }
     }
 
     private void EnsureRuleNameIsUnique(SqliteConnection connection, string name, int? currentRuleId)
@@ -1050,7 +1232,7 @@ WHERE Id = @id;";
         }
     }
 
-    private static string NormalizeTimeOfDay(string value)
+    private static string NormalizeTimeOfDay(string? value)
     {
         var clean = NormalizeRequired(value, "Нужно указать время", "SCHEDULE_TIME_REQUIRED");
         if (!TimeOnly.TryParseExact(clean, "HH:mm", CultureInfo.InvariantCulture, DateTimeStyles.None, out var time))
@@ -1060,9 +1242,9 @@ WHERE Id = @id;";
         return time.ToString("HH:mm");
     }
 
-    private static List<int> NormalizeDaysOfWeek(IReadOnlyList<int> days)
+    private static List<int> NormalizeDaysOfWeek(IReadOnlyList<int>? days)
     {
-        var result = days.Distinct().OrderBy(x => x).Where(x => x is >= 1 and <= 7).ToList();
+        var result = (days ?? Array.Empty<int>()).Distinct().OrderBy(x => x).Where(x => x is >= 1 and <= 7).ToList();
         if (result.Count == 0)
         {
             throw new ValidationProblemException("Нужно выбрать хотя бы один день недели", "SCHEDULE_DAYS_REQUIRED");
@@ -1103,10 +1285,18 @@ WHERE Id = @id;";
     {
         if (deviceId.HasValue)
         {
+            if (deviceId.Value <= 0)
+            {
+                throw new ValidationProblemException("deviceId должен быть положительным числом", "EVENT_DEVICE_ID_INVALID");
+            }
             return ReadDeviceOrThrow(connection, deviceId.Value);
         }
 
-        var cleanExternalId = NormalizeRequired(deviceExternalId, "Нужно указать deviceId или deviceExternalId", "EVENT_DEVICE_REFERENCE_REQUIRED");
+        if (string.IsNullOrWhiteSpace(deviceExternalId))
+        {
+            throw new ValidationProblemException("Нужно указать deviceId или deviceExternalId", "EVENT_DEVICE_REFERENCE_REQUIRED");
+        }
+        var cleanExternalId = NormalizeExternalId(deviceExternalId);
         var command = connection.CreateCommand();
         command.CommandText = @"
 SELECT d.Id,

@@ -1,7 +1,10 @@
 import flet as ft
+import json
+import re
 import requests
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 API_BASE = "http://localhost:5000"
 DEBUG_DEVICE_FORM = False
@@ -197,6 +200,119 @@ def main(page: ft.Page):
             return response.json()
         except requests.RequestException as ex:
             raise RuntimeError(f"API недоступен: {ex}") from ex
+
+    def require_text(value: Any, label: str, max_length: int = 120) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError(f"{label}: поле обязательно")
+        if len(clean) > max_length:
+            raise ValueError(f"{label}: максимум {max_length} символов")
+        return clean
+
+    def optional_text(value: Any, label: str, max_length: int = 120) -> str:
+        clean = str(value or "").strip()
+        if len(clean) > max_length:
+            raise ValueError(f"{label}: максимум {max_length} символов")
+        return clean
+
+    def require_selected(value: Any, label: str) -> str:
+        clean = str(value or "").strip()
+        if not clean:
+            raise ValueError(f"{label}: нужно выбрать значение")
+        return clean
+
+    def require_external_id(value: Any) -> str:
+        clean = require_text(value, "Идентификатор", 100)
+        if not re.fullmatch(r"[A-Za-z0-9._:-]+", clean):
+            raise ValueError("Идентификатор: разрешены только латиница, цифры, точка, дефис, подчёркивание и двоеточие")
+        return clean
+
+    def require_code_value(value: Any, label: str, max_length: int = 120) -> str:
+        clean = require_text(value, label, max_length)
+        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", clean):
+            raise ValueError(f"{label}: разрешены только латиница, цифры, точка, дефис, подчёркивание и двоеточие")
+        return clean
+
+    def require_hhmm(value: Any) -> str:
+        clean = require_text(value, "Время", 5)
+        if not re.fullmatch(r"\d{2}:\d{2}", clean):
+            raise ValueError("Время: нужен формат HH:mm")
+        hour, minute = (int(part) for part in clean.split(":"))
+        if hour > 23 or minute > 59:
+            raise ValueError("Время: часы 00-23, минуты 00-59")
+        return clean
+
+    def validate_url_value(value: str, label: str):
+        sample = (
+            value.replace("{{isOn}}", "true")
+            .replace("{isOn}", "true")
+            .replace("{{value}}", "true")
+            .replace("{value}", "true")
+            .replace("{{state}}", "ON")
+            .replace("{state}", "ON")
+            .replace("{{stateLower}}", "on")
+            .replace("{stateLower}", "on")
+        )
+        if not sample.lower().startswith(("http://", "https://")):
+            sample = f"http://{sample}"
+        parsed = urlparse(sample)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(f"{label}: нужен абсолютный HTTP/HTTPS URL")
+
+    def validate_connection_values(connection: dict[str, str], schema_fields: dict[str, dict[str, Any]] | None = None):
+        schema_fields = schema_fields or {}
+        for name, field_def in schema_fields.items():
+            if field_def.get("required") and not str(connection.get(name, "")).strip():
+                label = str(field_def.get("label") or CONNECTION_FIELD_LABELS.get(name, name))
+                raise ValueError(f"{label}: поле обязательно")
+
+        for key, value in connection.items():
+            if len(key) > 120 or re.search(r"\s", key):
+                raise ValueError("Имя поля подключения некорректно")
+            if len(value) > 8000:
+                raise ValueError(f"{CONNECTION_FIELD_LABELS.get(key, key)}: максимум 8000 символов")
+
+        if "host" in connection:
+            host = connection["host"]
+            if len(host) > 120 or "://" in host or "/" in host or re.search(r"\s", host):
+                raise ValueError("Host / IP: укажи host или IP без протокола, пути и пробелов")
+
+        if "port" in connection:
+            try:
+                port = int(connection["port"])
+            except ValueError as ex:
+                raise ValueError("Port: нужно число от 1 до 65535") from ex
+            if port < 1 or port > 65535:
+                raise ValueError("Port: нужно число от 1 до 65535")
+
+        for key in ("url", "snapshot_url"):
+            if key in connection:
+                validate_url_value(connection[key], CONNECTION_FIELD_LABELS.get(key, key))
+
+        if "method" in connection:
+            method = connection["method"].upper()
+            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
+                raise ValueError("HTTP-метод: допустимы GET, POST, PUT, PATCH, DELETE, HEAD")
+
+        if "headers" in connection:
+            try:
+                headers = json.loads(connection["headers"])
+            except json.JSONDecodeError as ex:
+                raise ValueError("Заголовки JSON: нужен валидный JSON-объект") from ex
+            if not isinstance(headers, dict):
+                raise ValueError("Заголовки JSON: нужен JSON-объект")
+            for header_name, header_value in headers.items():
+                if not str(header_name).strip() or re.search(r"[\s\r\n]", str(header_name)):
+                    raise ValueError("Заголовки JSON: некорректное имя заголовка")
+                if "\r" in str(header_value) or "\n" in str(header_value):
+                    raise ValueError("Заголовки JSON: значения не должны содержать переносы строк")
+
+        if "entity_id" in connection and "." not in connection["entity_id"]:
+            raise ValueError("Entity ID: нужен формат domain.object_id, например light.kitchen")
+
+        for key in ("topic", "state_topic"):
+            if key in connection and (connection[key].startswith("/") or connection[key].endswith("/") or any(ord(ch) < 32 for ch in connection[key])):
+                raise ValueError(f"{CONNECTION_FIELD_LABELS.get(key, key)}: topic не должен начинаться/заканчиваться slash и не должен содержать управляющие символы")
 
     def load_catalog(show_error: bool = False):
         try:
@@ -504,6 +620,7 @@ def main(page: ft.Page):
         form_status_text = TM("", size=12, color="#92400e")
         test_result = TM("", size=12)
         active_schema_names: set[str] = set()
+        active_schema_defs: dict[str, dict[str, Any]] = {}
 
         def debug_device_form(stage: str, **values: Any):
             if not DEBUG_DEVICE_FORM:
@@ -623,13 +740,14 @@ def main(page: ft.Page):
             return field(**kwargs)
 
         def apply_form_schema(preferred_provider: Any | None = None, source: str = "apply"):
-            nonlocal active_schema_names
+            nonlocal active_schema_names, active_schema_defs
             provider_before = provider_dd.value
             current_type = device_type_code(type_dd.value)
             provider, allowed, fallback_used = sync_provider_options(current_type, preferred_provider, source)
             current_provider = resolve_provider_code(provider.get("code", provider.get("key", provider_dd.value)))
             schema_fields = provider_form_fields(provider)
             active_schema_names = {str(item.get("name", "")).strip() for item in schema_fields if isinstance(item, dict) and str(item.get("name", "")).strip()}
+            active_schema_defs = {str(item.get("name", "")).strip(): item for item in schema_fields if isinstance(item, dict) and str(item.get("name", "")).strip()}
 
             connection_controls.clear()
             new_connection_controls: list[ft.Control] = []
@@ -787,6 +905,18 @@ def main(page: ft.Page):
                     "model": (model_tf.value or "").strip(),
                     "connection": collect_connection(),
                 }
+                require_text(payload["name"], "Название", 120)
+                require_external_id(payload["externalId"])
+                optional_text(payload["manufacturer"], "Производитель", 120)
+                optional_text(payload["model"], "Модель", 120)
+                require_selected(payload["type"], "Тип устройства")
+                require_selected(payload["provider"], "Провайдер")
+                require_selected(payload["protocol"], "Протокол")
+                optional_text(payload["channel"], "Канал", 120)
+                if not payload["roomId"] and not payload["room"]:
+                    raise ValueError("Комната: выбери комнату из списка или укажи новую")
+                optional_text(payload["room"], "Новая комната", 120)
+                validate_connection_values(payload["connection"], active_schema_defs)
                 print("[device-save] payload=", payload, flush=True)
                 if editing:
                     created = api_request("put", f"/api/devices/{device['id']}", payload)
@@ -882,6 +1012,8 @@ def main(page: ft.Page):
         def save(_):
             try:
                 payload = {"name": (name_tf.value or "").strip(), "zone": (zone_tf.value or "").strip()}
+                require_text(payload["name"], "Название комнаты", 120)
+                optional_text(payload["zone"], "Зона", 120)
                 if editing:
                     api_request("put", f"/api/rooms/{room['id']}", payload)
                     message = "Комната обновлена"
@@ -968,6 +1100,10 @@ def main(page: ft.Page):
                 order += 1
             try:
                 payload = {"name": (name_tf.value or "").strip(), "description": (description_tf.value or "").strip(), "actions": actions}
+                require_text(payload["name"], "Название сценария", 120)
+                optional_text(payload["description"], "Описание сценария", 1000)
+                if not actions:
+                    raise ValueError("Сценарий: добавьте хотя бы одно действие")
                 if editing:
                     api_request("put", f"/api/scenes/{scene['id']}", payload)
                     message = "Сценарий обновлен"
@@ -1058,6 +1194,18 @@ def main(page: ft.Page):
                     "actionTargetIsOn": True if action_state_dd.value == "on" else False,
                     "actionSceneId": int(action_scene_dd.value) if action_scene_dd.value else None,
                 }
+                require_text(payload["name"], "Название правила", 120)
+                optional_text(payload["description"], "Описание правила", 1000)
+                if not payload["triggerDeviceId"]:
+                    raise ValueError("Датчик / источник: нужно выбрать устройство")
+                require_code_value(payload["eventType"], "Тип события", 120)
+                require_selected(payload["comparisonOperator"], "Оператор")
+                require_text(payload["compareValue"], "Сравнить с", 500)
+                require_selected(payload["actionKind"], "Тип действия")
+                if payload["actionKind"] == "device_state" and not payload["actionDeviceId"]:
+                    raise ValueError("Целевое устройство: нужно выбрать устройство")
+                if payload["actionKind"] == "scene_run" and not payload["actionSceneId"]:
+                    raise ValueError("Сценарий: нужно выбрать сценарий")
                 if editing:
                     api_request("put", f"/api/rules/{rule['id']}", payload)
                     message = "Правило обновлено"
@@ -1152,6 +1300,16 @@ def main(page: ft.Page):
                     "actionTargetIsOn": True if action_state_dd.value == "on" else False,
                     "actionSceneId": int(action_scene_dd.value) if action_scene_dd.value else None,
                 }
+                require_text(payload["name"], "Название расписания", 120)
+                optional_text(payload["description"], "Описание расписания", 1000)
+                require_hhmm(payload["timeOfDay"])
+                if not payload["daysOfWeek"]:
+                    raise ValueError("Дни недели: выберите хотя бы один день")
+                require_selected(payload["actionKind"], "Тип действия")
+                if payload["actionKind"] == "device_state" and not payload["actionDeviceId"]:
+                    raise ValueError("Целевое устройство: нужно выбрать устройство")
+                if payload["actionKind"] == "scene_run" and not payload["actionSceneId"]:
+                    raise ValueError("Сценарий: нужно выбрать сценарий")
                 if editing:
                     api_request("put", f"/api/schedules/{schedule['id']}", payload)
                     message = "Расписание обновлено"
@@ -1229,15 +1387,21 @@ def main(page: ft.Page):
 
         def send_event(_):
             try:
+                payload = {
+                    "deviceId": int(source_device_dd.value or 0),
+                    "eventType": (event_type_tf.value or "").strip(),
+                    "value": (value_tf.value or "").strip(),
+                    "message": (message_tf.value or "").strip(),
+                }
+                if not payload["deviceId"]:
+                    raise ValueError("Источник события: нужно выбрать устройство")
+                require_code_value(payload["eventType"], "Тип события", 120)
+                require_text(payload["value"], "Значение", 500)
+                optional_text(payload["message"], "Сообщение", 1000)
                 result = api_request(
                     "post",
                     "/api/events",
-                    {
-                        "deviceId": int(source_device_dd.value or 0),
-                        "eventType": (event_type_tf.value or "").strip(),
-                        "value": (value_tf.value or "").strip(),
-                        "message": (message_tf.value or "").strip(),
-                    },
+                    payload,
                 ) or {}
                 close_dialog(dialog)
                 refresh_all()

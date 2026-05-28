@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("CalHouse.Api")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+e0577016e13a559fa739591e5b343683378224f9")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+fab3b674cf9b84c5f88ff3aead9da139561e1560")]
 [assembly: System.Reflection.AssemblyProductAttribute("CalHouse.Api")]
 [assembly: System.Reflection.AssemblyTitleAttribute("CalHouse.Api")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
