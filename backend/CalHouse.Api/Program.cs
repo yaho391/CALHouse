@@ -1,9 +1,12 @@
 using CalHouse.Api.Infrastructure;
+using CalHouse.Api.Models;
 using CalHouse.Api.Services;
+using System.Text.RegularExpressions;
 
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<DeviceCatalogService>();
+builder.Services.AddSingleton<AuthStore>();
 builder.Services.AddSingleton<DeviceStore>();
 builder.Services.AddSingleton<DeviceCommandQueue>();
 builder.Services.AddHostedService<DeviceCommandBackgroundService>();
@@ -29,10 +32,51 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseCors("DevCors");
+app.Use(async (context, next) =>
+{
+    var path = context.Request.Path.Value ?? string.Empty;
+    if (HttpMethods.IsOptions(context.Request.Method) || !path.StartsWith("/api/", StringComparison.OrdinalIgnoreCase) || IsPublicAuthPath(path))
+    {
+        await next();
+        return;
+    }
+
+    var auth = context.RequestServices.GetRequiredService<AuthStore>();
+    var user = auth.Authenticate(ReadBearerToken(context.Request));
+    if (user is null)
+    {
+        await WriteAuthError(context, StatusCodes.Status401Unauthorized, "AUTH_REQUIRED", "Authorization required");
+        return;
+    }
+
+    context.Items["CurrentUser"] = user;
+    if (!IsAuthorized(user, context.Request.Method, path))
+    {
+        await WriteAuthError(context, StatusCodes.Status403Forbidden, "FORBIDDEN", "Not enough permissions");
+        return;
+    }
+
+    await next();
+
+    if (context.Response.StatusCode < 400 && ShouldAudit(context.Request.Method, path))
+    {
+        auth.LogAudit(user.Login, context.Request.Method, path);
+    }
+});
 
 app.MapGet("/", () => Results.Text("CalHouse API is running"));
 
 var api = app.MapGroup("/api");
+
+api.MapPost("/auth/register", (RegisterRequest request, AuthStore auth) => Handle(() => Results.Ok(auth.Register(request.Login, request.Password, request.ConfirmPassword))));
+api.MapPost("/auth/login", (LoginRequest request, AuthStore auth) => Handle(() => Results.Ok(auth.Login(request.Login, request.Password))));
+api.MapGet("/auth/me", (HttpContext context) => Results.Ok(CurrentUser(context)));
+
+api.MapGet("/users", (AuthStore auth) => Handle(() => Results.Ok(auth.GetUsers())));
+api.MapPut("/users/{id:int}/role", (int id, UpdateUserRoleRequest request, AuthStore auth) => Handle(() => Results.Ok(auth.SetRole(id, request.Role))));
+api.MapPut("/users/{id:int}/active", (int id, UpdateUserActiveRequest request, AuthStore auth) => Handle(() => Results.Ok(auth.SetActive(id, request.IsActive))));
+api.MapPut("/users/{id:int}/password", (int id, ResetUserPasswordRequest request, HttpContext context, AuthStore auth) =>
+    Handle(() => Results.Ok(auth.ResetPassword(id, request.Password, request.ConfirmPassword, CurrentUser(context).Login))));
 
 api.MapGet("/device-catalog", (DeviceCatalogService catalog) => Results.Ok(catalog.GetCatalog()));
 api.MapGet("/device-catalog/types", (DeviceCatalogService catalog) => Results.Ok(catalog.GetDeviceTypes()));
@@ -218,6 +262,86 @@ static IResult Handle(Func<IResult> action)
     }
 }
 
+static bool IsPublicAuthPath(string path)
+{
+    return string.Equals(path, "/api/auth/register", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(path, "/api/auth/login", StringComparison.OrdinalIgnoreCase);
+}
+
+static string? ReadBearerToken(HttpRequest request)
+{
+    var header = request.Headers.Authorization.ToString();
+    const string prefix = "Bearer ";
+    if (header.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+    {
+        return header[prefix.Length..].Trim();
+    }
+    return null;
+}
+
+static bool IsAuthorized(AuthenticatedUser user, string method, string path)
+{
+    if (string.Equals(user.Role, "Admin", StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    if (path.StartsWith("/api/users", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+
+    if (HttpMethods.IsGet(method))
+    {
+        return true;
+    }
+
+    if (HttpMethods.IsPut(method) && Regex.IsMatch(path, "^/api/devices/[0-9]+/toggle$", RegexOptions.IgnoreCase))
+    {
+        return true;
+    }
+
+    if (HttpMethods.IsPost(method) && Regex.IsMatch(path, "^/api/scenes/[0-9]+/run$", RegexOptions.IgnoreCase))
+    {
+        return true;
+    }
+
+    if (HttpMethods.IsPost(method) && string.Equals(path, "/api/events", StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
+    return false;
+}
+
+static bool ShouldAudit(string method, string path)
+{
+    if (path.StartsWith("/api/auth", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
+    return !HttpMethods.IsGet(method);
+}
+
+static AuthenticatedUser CurrentUser(HttpContext context)
+{
+    return context.Items.TryGetValue("CurrentUser", out var value) && value is AuthenticatedUser user
+        ? user
+        : throw new ApiProblemException("Authorization required", "AUTH_REQUIRED", StatusCodes.Status401Unauthorized);
+}
+
+static async Task WriteAuthError(HttpContext context, int statusCode, string code, string message)
+{
+    context.Response.StatusCode = statusCode;
+    context.Response.ContentType = "application/json";
+    await context.Response.WriteAsJsonAsync(new { error = message, code, message });
+}
+
+internal sealed record RegisterRequest(string Login, string Password, string ConfirmPassword);
+internal sealed record LoginRequest(string Login, string Password);
+internal sealed record UpdateUserRoleRequest(string Role);
+internal sealed record UpdateUserActiveRequest(bool IsActive);
+internal sealed record ResetUserPasswordRequest(string Password, string ConfirmPassword);
 internal sealed record CreateDeviceRequest(
     string Name,
     string? Room,

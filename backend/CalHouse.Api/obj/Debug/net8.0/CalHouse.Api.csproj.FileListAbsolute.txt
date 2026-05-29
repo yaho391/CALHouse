@@ -116,4 +116,3 @@ C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\s
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\CalHouse.77F4A690.Up2Date
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\CalHouse.Api.genruntimeconfig.cache
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\ref\CalHouse.Api.dll
-C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\staticwebassets.upToDateCheck.txt

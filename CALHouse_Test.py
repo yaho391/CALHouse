@@ -81,7 +81,7 @@ async def main(page: ft.Page):
     page.spacing = 0
     page.theme_mode = ft.ThemeMode.LIGHT
 
-    state = {"tab": 0, "dark": False}
+    state = {"tab": 0, "dark": False, "token": None, "login": "", "role": ""}
     data: dict[str, Any] = {
         "catalog": {},
         "devices": [],
@@ -90,6 +90,7 @@ async def main(page: ft.Page):
         "rules": [],
         "schedules": [],
         "logs": [],
+        "users": [],
     }
 
     content = ft.Container(expand=True, padding=20)
@@ -103,7 +104,7 @@ async def main(page: ft.Page):
                 "text": "#f8fafc",
                 "muted": "#94a3b8",
                 "field": "#4a4a4a",
-                "nav": "#ffffff",
+                "nav": "#1f232a",
                 "accent": "#14b385",
             }
         return {
@@ -168,8 +169,11 @@ async def main(page: ft.Page):
     async def api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = API_TIMEOUT_SECONDS):
         url = f"{API_BASE}{path}"
         try:
+            headers = {}
+            if state.get("token"):
+                headers["Authorization"] = f"Bearer {state['token']}"
             async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.request(method=method.upper(), url=url, json=payload)
+                response = await client.request(method=method.upper(), url=url, json=payload, headers=headers)
             if response.status_code >= 400:
                 print(f"[api:error] status_code={response.status_code}", flush=True)
                 print(f"[api:error] response.text={response.text}", flush=True)
@@ -268,6 +272,22 @@ async def main(page: ft.Page):
         if first_error:
             raise ValueError(first_error)
 
+    def is_authenticated() -> bool:
+        return bool(state.get("token"))
+
+    def is_admin() -> bool:
+        return str(state.get("role", "")).lower() == "admin"
+
+    def clear_data():
+        data["catalog"] = {}
+        data["devices"] = []
+        data["rooms"] = []
+        data["scenes"] = []
+        data["rules"] = []
+        data["schedules"] = []
+        data["logs"] = []
+        data["users"] = []
+
     async def load_catalog(show_error: bool = False):
         try:
             data["catalog"] = await api_request("get", "/api/device-catalog") or {}
@@ -324,7 +344,22 @@ async def main(page: ft.Page):
             if show_error:
                 show_message(str(ex))
 
+    async def load_users(show_error: bool = False):
+        if not is_admin():
+            data["users"] = []
+            return
+        try:
+            items = await api_request("get", "/api/users") or []
+            data["users"] = items if isinstance(items, list) else []
+        except Exception as ex:
+            data["users"] = []
+            if show_error:
+                show_message(str(ex))
+
     async def refresh_all(show_toast: bool = False):
+        if not is_authenticated():
+            clear_data()
+            return
         await asyncio.gather(
             load_catalog(show_error=True),
             load_rooms(show_error=True),
@@ -333,11 +368,15 @@ async def main(page: ft.Page):
             load_rules(show_error=True),
             load_schedules(show_error=True),
             load_logs(show_error=True),
+            load_users(show_error=True),
         )
         if show_toast:
             show_message("Данные обновлены")
 
     async def refresh_sections(*sections: str, show_toast: bool = False):
+        if not is_authenticated():
+            clear_data()
+            return
         tasks = []
         if "catalog" in sections:
             tasks.append(load_catalog(show_error=True))
@@ -353,6 +392,8 @@ async def main(page: ft.Page):
             tasks.append(load_schedules(show_error=True))
         if "logs" in sections:
             tasks.append(load_logs(show_error=True))
+        if "users" in sections:
+            tasks.append(load_users(show_error=True))
         if tasks:
             await asyncio.gather(*tasks)
         if show_toast:
@@ -1591,7 +1632,7 @@ async def main(page: ft.Page):
                             ft.Row(
                                 spacing=10,
                                 controls=[
-                                    ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog()))),
+                                    ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, visible=is_admin(), on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog()))),
                                     ft.OutlinedButton(
                                         "Отправить событие",
                                         icon=ft.Icons.SENSORS,
@@ -1631,10 +1672,11 @@ async def main(page: ft.Page):
             action_buttons = []
             if device_type_capabilities(device.get("type")).get("canToggle", True):
                 action_buttons.append(ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=async_click(lambda e, device_id=device["id"]: run_button_action(e, lambda: toggle_device(device_id)))))
-            action_buttons.extend([
-                ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=async_click(lambda e, d=device: run_button_action(e, lambda: open_device_dialog(d)))),
-                ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство")))),
-            ])
+            if is_admin():
+                action_buttons.extend([
+                    ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=async_click(lambda e, d=device: run_button_action(e, lambda: open_device_dialog(d)))),
+                    ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство")))),
+                ])
             device_cards.append(
                 card(
                     ft.Row(
@@ -1665,6 +1707,7 @@ async def main(page: ft.Page):
                         controls=action_buttons,
                     ),
                     ft.Row(
+                        visible=is_admin(),
                         spacing=10,
                         controls=[
                             room_dd,
@@ -1681,7 +1724,7 @@ async def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Устройства", size=22, weight=ft.FontWeight.BOLD), TM("Подключение реальных устройств, тест связи и управление")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog()))), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build(show_toast=True))))]),
+                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog())))] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build(show_toast=True))))]),
                     ],
                 ),
                 *(device_cards or [card(TM("Устройств пока нет"))]),
@@ -1705,7 +1748,7 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Column(spacing=4, controls=[T(str(room.get("name", "Комната")), size=18, weight=ft.FontWeight.BOLD), TM(f"Зона: {room.get('zone', '') or 'Не указана'}", size=12), TM(f"Устройств: {room.get('deviceCount', 0)}", size=12)]),
-                            ft.Row(spacing=8, controls=[ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, r=room: open_room_dialog(r)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, r=room: delete_room(int(r["id"]), str(r.get("name", "Комната"))))]),
+                            ft.Row(visible=is_admin(), spacing=8, controls=[ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, r=room: open_room_dialog(r)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, r=room: delete_room(int(r["id"]), str(r.get("name", "Комната"))))]),
                         ],
                     ),
                     T("Устройства в комнате", weight=ft.FontWeight.BOLD),
@@ -1735,7 +1778,7 @@ async def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Комнаты и зоны", size=22, weight=ft.FontWeight.BOLD), TM("CRUD комнат и группировка устройств")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rooms", "devices", show_toast=True))))]),
+                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rooms", "devices", show_toast=True))))]),
                     ],
                 ),
                 *(room_cards or [card(TM("Комнат пока нет"))]),
@@ -1752,7 +1795,7 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Column(spacing=4, controls=[T(str(scene.get("name", "Сценарий")), size=18, weight=ft.FontWeight.BOLD), TM(str(scene.get("description", "")) or "Без описания", size=12)]),
-                            ft.Row(spacing=8, controls=[ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, s=scene: open_scene_dialog(s)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, s=scene: delete_scene(int(s["id"]), str(s.get("name", "Сценарий"))))]),
+                            ft.Row(visible=is_admin(), spacing=8, controls=[ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, s=scene: open_scene_dialog(s)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, s=scene: delete_scene(int(s["id"]), str(s.get("name", "Сценарий"))))]),
                         ],
                     ),
                     T("Действия", weight=ft.FontWeight.BOLD),
@@ -1789,7 +1832,7 @@ async def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Сценарии", size=22, weight=ft.FontWeight.BOLD), TM("Ручные сценарии, которые могут запускаться и из правил, и по расписанию")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("scenes", show_toast=True))))]),
+                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("scenes", show_toast=True))))]),
                     ],
                 ),
                 *(scene_cards or [card(TM("Сценариев пока нет"))]),
@@ -1809,13 +1852,13 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Column(spacing=4, controls=[T(str(rule.get("name", "Правило")), size=18, weight=ft.FontWeight.BOLD), TM(str(rule.get("description", "")) or "Без описания", size=12), TM(f"Если {rule.get('triggerDeviceName', 'датчик')} / {rule.get('triggerEventType', 'event')} {rule.get('comparisonOperator', '=')} {rule.get('compareValue', '')}", size=12)]),
-                            ft.Row(spacing=8, controls=[status_chip("Активно" if rule.get("isEnabled") else "Выключено", "enabled" if rule.get("isEnabled") else "disabled"), ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, r=rule: open_rule_dialog(r)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, r=rule: delete_rule(int(r["id"]), str(r.get("name", "Правило"))))]),
+                            ft.Row(spacing=8, controls=[status_chip("Активно" if rule.get("isEnabled") else "Выключено", "enabled" if rule.get("isEnabled") else "disabled"), ft.IconButton(ft.Icons.EDIT_OUTLINED, visible=is_admin(), on_click=lambda e, r=rule: open_rule_dialog(r)), ft.IconButton(ft.Icons.DELETE_OUTLINE, visible=is_admin(), on_click=lambda e, r=rule: delete_rule(int(r["id"]), str(r.get("name", "Правило"))))]),
                         ],
                     ),
                     TM(action_text, size=12),
                     TM(f"Последнее срабатывание: {fmt_dt(rule.get('lastTriggeredAt'))}", size=12),
                     TM(rule.get("lastTriggerMessage") or "", size=12),
-                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not rule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if rule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, rid=rule["id"], enabled=not bool(rule.get("isEnabled")): run_button_action(e, lambda: set_rule_enabled(int(rid), enabled)))), ft.OutlinedButton("Тест событием", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog())]),
+                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not rule.get("isEnabled") else "Выключить", visible=is_admin(), icon=ft.Icons.TOGGLE_ON if rule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, rid=rule["id"], enabled=not bool(rule.get("isEnabled")): run_button_action(e, lambda: set_rule_enabled(int(rid), enabled)))), ft.OutlinedButton("Тест событием", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog())]),
                 )
             )
 
@@ -1827,7 +1870,7 @@ async def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Правила", size=22, weight=ft.FontWeight.BOLD), TM("Если событие датчика подходит под условие, выполняется действие или сценарий")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog()), ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rules", show_toast=True))))]),
+                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog())] if is_admin() else []) + [ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rules", show_toast=True))))]),
                     ],
                 ),
                 *(rule_cards or [card(TM("Правил пока нет"))]),
@@ -1847,13 +1890,13 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Column(spacing=4, controls=[T(str(schedule.get("name", "Расписание")), size=18, weight=ft.FontWeight.BOLD), TM(str(schedule.get("description", "")) or "Без описания", size=12), TM(f"Время: {schedule.get('timeOfDay', '—')} · Дни: {schedule_days_title(schedule.get('daysOfWeek'))}", size=12)]),
-                            ft.Row(spacing=8, controls=[status_chip("Активно" if schedule.get("isEnabled") else "Выключено", "enabled" if schedule.get("isEnabled") else "disabled"), ft.IconButton(ft.Icons.EDIT_OUTLINED, on_click=lambda e, s=schedule: open_schedule_dialog(s)), ft.IconButton(ft.Icons.DELETE_OUTLINE, on_click=lambda e, s=schedule: delete_schedule(int(s["id"]), str(s.get("name", "Расписание"))))]),
+                            ft.Row(spacing=8, controls=[status_chip("Активно" if schedule.get("isEnabled") else "Выключено", "enabled" if schedule.get("isEnabled") else "disabled"), ft.IconButton(ft.Icons.EDIT_OUTLINED, visible=is_admin(), on_click=lambda e, s=schedule: open_schedule_dialog(s)), ft.IconButton(ft.Icons.DELETE_OUTLINE, visible=is_admin(), on_click=lambda e, s=schedule: delete_schedule(int(s["id"]), str(s.get("name", "Расписание"))))]),
                         ],
                     ),
                     TM(action_text, size=12),
                     TM(f"Последний запуск: {fmt_dt(schedule.get('lastRunAt'))}", size=12),
                     TM(schedule.get("lastRunMessage") or "", size=12),
-                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not schedule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if schedule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, sid=schedule["id"], enabled=not bool(schedule.get("isEnabled")): run_button_action(e, lambda: set_schedule_enabled(int(sid), enabled)))), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules)))]),
+                    ft.Row(visible=is_admin(), spacing=10, controls=[ft.ElevatedButton("Включить" if not schedule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if schedule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, sid=schedule["id"], enabled=not bool(schedule.get("isEnabled")): run_button_action(e, lambda: set_schedule_enabled(int(sid), enabled)))), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules)))]),
                 )
             )
 
@@ -1865,7 +1908,7 @@ async def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Расписание", size=22, weight=ft.FontWeight.BOLD), TM("Автоматический запуск действий и сценариев по времени")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog()), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules))), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("schedules", show_toast=True))))]),
+                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog()), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules)))] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("schedules", show_toast=True))))]),
                     ],
                 ),
                 *(schedule_cards or [card(TM("Расписаний пока нет"))]),
@@ -1895,6 +1938,132 @@ async def main(page: ft.Page):
             ],
         )
 
+    async def apply_auth_result(result: dict[str, Any]):
+        state["token"] = result.get("token")
+        state["login"] = result.get("login", "")
+        state["role"] = result.get("role", "User")
+        state["tab"] = 0
+        await refresh_all()
+        build()
+
+    def logout():
+        state["token"] = None
+        state["login"] = ""
+        state["role"] = ""
+        state["tab"] = 0
+        clear_data()
+        build()
+        show_message("Выход выполнен")
+
+    def auth_view() -> ft.Control:
+        login_tf = field(label="Логин", hint_text="admin")
+        password_tf = field(label="Пароль", password=True, can_reveal_password=True)
+        confirm_tf = field(label="Повтор пароля", password=True, can_reveal_password=True)
+
+        async def submit_login():
+            result = await api_request("post", "/api/auth/login", {"login": (login_tf.value or "").strip(), "password": password_tf.value or ""})
+            await apply_auth_result(result or {})
+            show_message("Вход выполнен")
+
+        async def submit_register():
+            result = await api_request(
+                "post",
+                "/api/auth/register",
+                {"login": (login_tf.value or "").strip(), "password": password_tf.value or "", "confirmPassword": confirm_tf.value or ""},
+            )
+            await apply_auth_result(result or {})
+            show_message("Регистрация выполнена")
+
+        return ft.Container(
+            expand=True,
+            alignment=ft.Alignment(0, 0),
+            content=ft.Container(
+                width=430,
+                padding=24,
+                bgcolor=c("card"),
+                border=ft.border.all(1, c("border")),
+                border_radius=16,
+                content=ft.Column(
+                    tight=True,
+                    spacing=12,
+                    controls=[
+                        T("CALHouse", size=28, weight=ft.FontWeight.BOLD),
+                        TM("Войдите или зарегистрируйте первого администратора"),
+                        login_tf,
+                        password_tf,
+                        confirm_tf,
+                        ft.Row(
+                            spacing=10,
+                            controls=[
+                                ft.ElevatedButton("Войти", icon=ft.Icons.LOGIN, on_click=async_click(lambda e: run_button_action(e, submit_login))),
+                                ft.OutlinedButton("Зарегистрироваться", icon=ft.Icons.PERSON_ADD, on_click=async_click(lambda e: run_button_action(e, submit_register))),
+                            ],
+                        ),
+                    ],
+                ),
+            ),
+        )
+
+    async def set_user_role(user_id: int, role: str):
+        await api_request("put", f"/api/users/{user_id}/role", {"role": role})
+        await refresh_sections("users", "logs")
+        build()
+        show_message("Роль пользователя обновлена")
+
+    async def set_user_active(user_id: int, is_active: bool):
+        await api_request("put", f"/api/users/{user_id}/active", {"isActive": is_active})
+        await refresh_sections("users", "logs")
+        build()
+        show_message("Статус пользователя обновлен")
+
+    async def reset_user_password(user_id: int, password_value: str):
+        clean_password = password_value or ""
+        await api_request("put", f"/api/users/{user_id}/password", {"password": clean_password, "confirmPassword": clean_password})
+        await refresh_sections("users", "logs")
+        build()
+        show_message("Пароль пользователя сброшен")
+
+    def users_admin_panel() -> ft.Control:
+        if not is_admin():
+            return ft.Container()
+
+        rows = []
+        for user in data["users"]:
+            role_dd = dropdown(value=str(user.get("role", "User")), width=150, options=[ft.dropdown.Option("User"), ft.dropdown.Option("Admin")])
+            active_sw = ft.Switch(value=bool(user.get("isActive", True)))
+            password_tf = field(label="Новый пароль", password=True, can_reveal_password=True, width=180)
+            user_id = int(user.get("id", 0))
+            rows.append(
+                ft.Container(
+                    padding=10,
+                    border_radius=12,
+                    bgcolor=c("field"),
+                    content=ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Column(spacing=2, controls=[T(str(user.get("login", "")), weight=ft.FontWeight.BOLD), TM(str(user.get("role", "User")), size=12)]),
+                            ft.Row(
+                                spacing=8,
+                                controls=[
+                                    role_dd,
+                                    ft.OutlinedButton("Роль", on_click=async_click(lambda e, uid=user_id, dd=role_dd: run_button_action(e, lambda: set_user_role(uid, dd.value or "User")))),
+                                    active_sw,
+                                    ft.OutlinedButton("Активность", on_click=async_click(lambda e, uid=user_id, sw=active_sw: run_button_action(e, lambda: set_user_active(uid, bool(sw.value))))),
+                                    password_tf,
+                                    ft.OutlinedButton("Сбросить пароль", on_click=async_click(lambda e, uid=user_id, tf=password_tf: run_button_action(e, lambda: reset_user_password(uid, tf.value or "")))),
+                                ],
+                            ),
+                        ],
+                    ),
+                )
+            )
+
+        return card(
+            T("Пользователи", weight=ft.FontWeight.BOLD),
+            *(rows or [TM("Пользователей пока нет")]),
+            ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("users", show_toast=True)))),
+        )
+
     def settings_view() -> ft.Control:
         dark_sw = ft.Switch(label="Темная тема", value=state["dark"])
 
@@ -1910,7 +2079,8 @@ async def main(page: ft.Page):
             controls=[
                 T("Настройки", size=22, weight=ft.FontWeight.BOLD),
                 card(T("Интерфейс", weight=ft.FontWeight.BOLD), dark_sw, ft.ElevatedButton("Сохранить", on_click=save_settings)),
-                card(T("---", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}")),
+                users_admin_panel(),
+                card(T("Подключение к API", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}"), TM("backend из backend/CalHouse.Api")),
             ],
         )
 
@@ -1937,9 +2107,27 @@ async def main(page: ft.Page):
 
     def build():
         page.bgcolor = c("bg")
+        if not is_authenticated():
+            page.navigation_bar = None
+            page.appbar = None
+            content.content = auth_view()
+            page.controls.clear()
+            page.add(content)
+            page.update()
+            return
+
         page.navigation_bar = nav
+        nav.bgcolor = c("nav")
         nav.selected_index = state["tab"]
-        page.appbar = ft.AppBar(bgcolor=c("nav"), title=ft.Text("CALHouse", color=c("text"), weight=ft.FontWeight.BOLD), actions=[ft.IconButton(ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build(show_toast=True))), icon_color=c("text"))])
+        page.appbar = ft.AppBar(
+            bgcolor=c("nav"),
+            title=ft.Text("CALHouse", color=c("text"), weight=ft.FontWeight.BOLD),
+            actions=[
+                ft.Text(f"{state.get('login', '')} / {state.get('role', '')}", color=c("text")),
+                ft.IconButton(ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build(show_toast=True))), icon_color=c("text")),
+                ft.TextButton("Выйти", on_click=lambda e: logout()),
+            ],
+        )
         views = {
             0: home_view,
             1: devices_view,
@@ -1955,7 +2143,6 @@ async def main(page: ft.Page):
         page.add(content)
         page.update()
 
-    await refresh_all()
     build()
 
 

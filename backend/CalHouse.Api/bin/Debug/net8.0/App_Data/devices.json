@@ -1,5 +1,19 @@
 [
   {
+    "id": 18,
+    "name": "asdf",
+    "room": "\u0422\u0443\u0430\u043B\u0435\u0442",
+    "isOn": true,
+    "type": "socket",
+    "provider": "mock",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {}
+  },
+  {
     "id": 5,
     "name": "ertyu",
     "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
