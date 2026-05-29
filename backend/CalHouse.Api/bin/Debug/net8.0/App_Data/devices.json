@@ -130,6 +130,20 @@
     }
   },
   {
+    "id": 17,
+    "name": "\u0443\u043C\u043D\u0430\u044F \u043B\u0430\u043C\u043F\u0430",
+    "room": "\u041A\u0443\u0445\u043D\u044F",
+    "isOn": true,
+    "type": "light",
+    "provider": "mock",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {}
+  },
+  {
     "id": 4,
     "name": "\u0444\u044B\u0432",
     "room": "\u0444\u044B\u0432",

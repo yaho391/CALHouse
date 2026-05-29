@@ -101,12 +101,12 @@ public partial class DeviceStore
         var cleanManufacturer = NormalizeSafeTextOptional(manufacturer, "Производитель", 2, MaxManufacturerLength, "DEVICE_MANUFACTURER_INVALID");
         var cleanModel = NormalizeSafeTextOptional(model, "Модель", 1, MaxModelLength, "DEVICE_MODEL_INVALID");
         var connectionData = NormalizeConnection(connection);
+        var connectionCheck = ValidateConnectionInternal(cleanProvider, cleanProtocol, connectionData);
 
         lock (_sync)
         {
             using var db = OpenConnection();
             EnsureDeviceExternalIdIsUnique(db, cleanExternalId, null);
-            var connectionCheck = ValidateConnectionInternal(cleanProvider, cleanProtocol, connectionData);
             using var transaction = db.BeginTransaction();
             var resolvedRoomId = ResolveRoomId(db, transaction, roomId, roomName, createIfMissing: true);
 
@@ -162,8 +162,6 @@ SELECT last_insert_rowid();";
         {
             using var db = OpenConnection();
             var current = ReadDeviceOrThrow(db, id);
-            using var transaction = db.BeginTransaction();
-
             var finalName = string.IsNullOrWhiteSpace(name) ? current.Name : NormalizeSafeTextRequired(name, "Название устройства", 2, MaxNameLength, "DEVICE_NAME_REQUIRED", "DEVICE_NAME_INVALID");
             var finalType = string.IsNullOrWhiteSpace(type) ? current.Type : NormalizeOptional(type, current.Type);
             var finalProvider = string.IsNullOrWhiteSpace(provider) ? _catalog.NormalizeProviderCode(current.Provider) : _catalog.NormalizeProviderCode(provider);
@@ -176,11 +174,12 @@ SELECT last_insert_rowid();";
             var finalModel = model is null ? current.Model : NormalizeSafeTextOptional(model, "Модель", 1, MaxModelLength, "DEVICE_MODEL_INVALID");
             var finalConnection = connection is null ? current.Connection : NormalizeConnection(connection);
             var finalIsOn = isOn ?? current.IsOn;
-            var finalRoomId = ResolveRoomId(db, transaction, roomId ?? current.RoomId, roomName, createIfMissing: !string.IsNullOrWhiteSpace(roomName));
             var now = DateTime.UtcNow;
             EnsureDeviceExternalIdIsUnique(db, finalExternalId, id);
             var connectionCheck = ValidateConnectionInternal(finalProvider, finalProtocol, finalConnection);
 
+            using var transaction = db.BeginTransaction();
+            var finalRoomId = ResolveRoomId(db, transaction, roomId ?? current.RoomId, roomName, createIfMissing: !string.IsNullOrWhiteSpace(roomName));
             var command = db.CreateCommand();
             command.Transaction = transaction;
             command.CommandText = @"
@@ -229,13 +228,22 @@ WHERE Id = @id;";
 
     public Device ToggleDevice(int id)
     {
+        Device current;
+        bool nextState;
         lock (_sync)
         {
             using var db = OpenConnection();
-            var current = ReadDeviceOrThrow(db, id);
+            current = ReadDeviceOrThrow(db, id);
+            nextState = !current.IsOn;
+        }
+
+        var commandResult = ExecuteDeviceStateCommand(current, nextState);
+
+        lock (_sync)
+        {
+            using var db = OpenConnection();
+            var latest = ReadDeviceOrThrow(db, id);
             using var transaction = db.BeginTransaction();
-            var nextState = !current.IsOn;
-            var commandResult = ExecuteDeviceStateCommand(current, nextState);
             var now = DateTime.UtcNow;
 
             var command = db.CreateCommand();
@@ -249,7 +257,7 @@ SET IsOn = @isOn,
     UpdatedAt = @updatedAt
 WHERE Id = @id;";
             command.Parameters.AddWithValue("@id", id);
-            command.Parameters.AddWithValue("@isOn", commandResult.Ok ? (nextState ? 1 : 0) : (current.IsOn ? 1 : 0));
+            command.Parameters.AddWithValue("@isOn", commandResult.Ok ? (nextState ? 1 : 0) : (latest.IsOn ? 1 : 0));
             command.Parameters.AddWithValue("@connectionStatus", commandResult.Status);
             command.Parameters.AddWithValue("@connectionMessage", commandResult.Message);
             command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
@@ -263,10 +271,10 @@ WHERE Id = @id;";
                 "api",
                 commandResult.Ok ? "DEVICE_TOGGLED" : "DEVICE_TOGGLE_FAILED",
                 commandResult.Ok
-                    ? $"Устройство «{current.Name}» переключено в {(nextState ? "ON" : "OFF")}. {commandResult.Message}"
-                    : $"Не удалось переключить устройство «{current.Name}» в {(nextState ? "ON" : "OFF")}: {commandResult.Message}",
+                    ? $"Устройство «{latest.Name}» переключено в {(nextState ? "ON" : "OFF")}. {commandResult.Message}"
+                    : $"Не удалось переключить устройство «{latest.Name}» в {(nextState ? "ON" : "OFF")}: {commandResult.Message}",
                 deviceId: id,
-                roomId: current.RoomId);
+                roomId: latest.RoomId);
             transaction.Commit();
 
             SyncLegacyDevicesJson(db);

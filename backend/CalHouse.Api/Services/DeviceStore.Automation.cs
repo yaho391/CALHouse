@@ -1005,7 +1005,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
                 return new DeviceCommandResult(false, "no_connection", headersError);
             }
 
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
             using var request = new HttpRequestMessage(new HttpMethod(method), url);
 
             var contentType = headers.TryGetValue("Content-Type", out var requestedContentType)
