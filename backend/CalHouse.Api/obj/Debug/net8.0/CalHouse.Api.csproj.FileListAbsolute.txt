@@ -122,3 +122,4 @@ C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse
 C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.runtimeconfig.json
 C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.dll
 C:\Users\pavuk\Documents\GitHub\CALHouse\.codex_buildcheck\CalHouse.Api\CalHouse.Api.pdb
+C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\staticwebassets.upToDateCheck.txt
