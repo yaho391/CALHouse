@@ -1,10 +1,12 @@
 import flet as ft
-import requests
+import asyncio
+import httpx
 from datetime import datetime
 from typing import Any
 import validation as validators
 
 API_BASE = "http://localhost:5000"
+API_TIMEOUT_SECONDS = 3.0
 DEBUG_DEVICE_FORM = False
 DEFAULT_DEVICE_TYPES = [
     {"code": "light", "displayName": "Свет", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
@@ -69,7 +71,7 @@ def fmt_dt(value: str | None) -> str:
         return value
 
 
-def main(page: ft.Page):
+async def main(page: ft.Page):
     page.title = "CALHouse / Smart Home"
     page.window_width = 1400
     page.window_height = 900
@@ -163,10 +165,11 @@ def main(page: ft.Page):
         dialog.open = False
         page.update()
 
-    def api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: int = 10):
+    async def api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = API_TIMEOUT_SECONDS):
         url = f"{API_BASE}{path}"
         try:
-            response = requests.request(method=method.upper(), url=url, json=payload, timeout=timeout)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.request(method=method.upper(), url=url, json=payload)
             if response.status_code >= 400:
                 print(f"[api:error] status_code={response.status_code}", flush=True)
                 print(f"[api:error] response.text={response.text}", flush=True)
@@ -196,7 +199,9 @@ def main(page: ft.Page):
             if not response.text:
                 return None
             return response.json()
-        except requests.RequestException as ex:
+        except httpx.TimeoutException as ex:
+            raise RuntimeError("Сервер долго не отвечает или устройство не ответило") from ex
+        except httpx.RequestError as ex:
             raise RuntimeError(f"API недоступен: {ex}") from ex
 
     def require_text(value: Any, label: str, max_length: int = 80) -> str:
@@ -263,72 +268,142 @@ def main(page: ft.Page):
         if first_error:
             raise ValueError(first_error)
 
-    def load_catalog(show_error: bool = False):
+    async def load_catalog(show_error: bool = False):
         try:
-            data["catalog"] = api_request("get", "/api/device-catalog") or {}
+            data["catalog"] = await api_request("get", "/api/device-catalog") or {}
         except Exception as ex:
             data["catalog"] = {}
             if show_error:
                 show_message(str(ex))
 
-    def load_devices(show_error: bool = False):
+    async def load_devices(show_error: bool = False):
         try:
-            items = api_request("get", "/api/devices") or []
+            items = await api_request("get", "/api/devices") or []
             data["devices"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
-    def load_rooms(show_error: bool = False):
+    async def load_rooms(show_error: bool = False):
         try:
-            items = api_request("get", "/api/rooms") or []
+            items = await api_request("get", "/api/rooms") or []
             data["rooms"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
-    def load_scenes(show_error: bool = False):
+    async def load_scenes(show_error: bool = False):
         try:
-            items = api_request("get", "/api/scenes") or []
+            items = await api_request("get", "/api/scenes") or []
             data["scenes"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
-    def load_rules(show_error: bool = False):
+    async def load_rules(show_error: bool = False):
         try:
-            items = api_request("get", "/api/rules") or []
+            items = await api_request("get", "/api/rules") or []
             data["rules"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
-    def load_schedules(show_error: bool = False):
+    async def load_schedules(show_error: bool = False):
         try:
-            items = api_request("get", "/api/schedules") or []
+            items = await api_request("get", "/api/schedules") or []
             data["schedules"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
-    def load_logs(show_error: bool = False):
+    async def load_logs(show_error: bool = False):
         try:
-            items = api_request("get", "/api/logs?limit=80") or []
+            items = await api_request("get", "/api/logs?limit=80") or []
             data["logs"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
                 show_message(str(ex))
 
-    def refresh_all(show_toast: bool = False):
-        load_catalog(show_error=True)
-        load_rooms(show_error=True)
-        load_devices(show_error=True)
-        load_scenes(show_error=True)
-        load_rules(show_error=True)
-        load_schedules(show_error=True)
-        load_logs(show_error=True)
+    async def refresh_all(show_toast: bool = False):
+        await asyncio.gather(
+            load_catalog(show_error=True),
+            load_rooms(show_error=True),
+            load_devices(show_error=True),
+            load_scenes(show_error=True),
+            load_rules(show_error=True),
+            load_schedules(show_error=True),
+            load_logs(show_error=True),
+        )
         if show_toast:
             show_message("Данные обновлены")
+
+    async def refresh_sections(*sections: str, show_toast: bool = False):
+        tasks = []
+        if "catalog" in sections:
+            tasks.append(load_catalog(show_error=True))
+        if "rooms" in sections:
+            tasks.append(load_rooms(show_error=True))
+        if "devices" in sections:
+            tasks.append(load_devices(show_error=True))
+        if "scenes" in sections:
+            tasks.append(load_scenes(show_error=True))
+        if "rules" in sections:
+            tasks.append(load_rules(show_error=True))
+        if "schedules" in sections:
+            tasks.append(load_schedules(show_error=True))
+        if "logs" in sections:
+            tasks.append(load_logs(show_error=True))
+        if tasks:
+            await asyncio.gather(*tasks)
+        if show_toast:
+            show_message("Данные обновлены")
+
+    async def refresh_and_build(*sections: str, show_toast: bool = False):
+        if sections:
+            await refresh_sections(*sections, show_toast=show_toast)
+        else:
+            await refresh_all(show_toast=show_toast)
+        build()
+
+    def async_click(handler):
+        async def wrapper(e):
+            result = handler(e)
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
+
+        return wrapper
+
+    async def run_button_action(e, action, busy_text: str = "Выполняется..."):
+        control = getattr(e, "control", None)
+        old_disabled = getattr(control, "disabled", None) if control is not None else None
+        old_text = getattr(control, "text", None) if control is not None and hasattr(control, "text") else None
+        try:
+            if control is not None:
+                if hasattr(control, "disabled"):
+                    control.disabled = True
+                if old_text is not None:
+                    control.text = busy_text
+                try:
+                    control.update()
+                except Exception:
+                    page.update()
+            result = action()
+            if asyncio.iscoroutine(result):
+                return await result
+            return result
+        except Exception as ex:
+            show_message(str(ex))
+        finally:
+            if control is not None:
+                if old_disabled is not None and hasattr(control, "disabled"):
+                    control.disabled = old_disabled
+                if old_text is not None:
+                    control.text = old_text
+                try:
+                    control.update()
+                except Exception:
+                    page.update()
 
     def device_type_defs() -> list[dict[str, Any]]:
         items = data["catalog"].get("deviceTypes") or DEFAULT_DEVICE_TYPES
@@ -513,11 +588,13 @@ def main(page: ft.Page):
     def confirm_action(title: str, message: str, action):
         dialog_ref = None
 
-        def on_yes(_):
+        async def on_yes(e):
             nonlocal dialog_ref
             if dialog_ref is not None:
                 close_dialog(dialog_ref)
-            action()
+            result = action()
+            if asyncio.iscoroutine(result):
+                await result
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -552,8 +629,8 @@ def main(page: ft.Page):
     def bool_chip(value: bool):
         return status_chip("Включено" if value else "Выключено", "connected" if value else "disabled")
 
-    def open_device_dialog(device: dict[str, Any] | None = None):
-        load_catalog(show_error=True)
+    async def open_device_dialog(device: dict[str, Any] | None = None):
+        await load_catalog(show_error=True)
         editing = device is not None
         catalog_is_loaded = bool(data["catalog"].get("providers")) and bool(data["catalog"].get("deviceTypes"))
         if not catalog_is_loaded:
@@ -858,11 +935,11 @@ def main(page: ft.Page):
         provider_dd.on_select = on_provider_change
         apply_form_schema(preferred_provider=provider_key, source="init")
 
-        def test_connection(_):
+        async def test_connection():
             try:
                 ensure_connection_controls_valid()
                 validate_connection_values(collect_connection(), active_schema_defs)
-                result = api_request(
+                result = await api_request(
                     "post",
                     "/api/devices/validate-connection",
                     {
@@ -883,7 +960,7 @@ def main(page: ft.Page):
             except Exception as ex:
                 show_message(str(ex))
 
-        def save(_):
+        async def save():
             try:
                 payload = {
                     "name": (name_tf.value or "").strip(),
@@ -930,14 +1007,13 @@ def main(page: ft.Page):
                         flush=True,
                     )
                 if editing:
-                    created = api_request("put", f"/api/devices/{device['id']}", payload)
+                    created = await api_request("put", f"/api/devices/{device['id']}", payload)
                     message = "Устройство обновлено"
                 else:
-                    created = api_request("post", "/api/devices", payload)
+                    created = await api_request("post", "/api/devices", payload)
                     message = "Устройство добавлено"
                 close_dialog(dialog)
-                refresh_all()
-                build()
+                await refresh_and_build("devices", "rooms", "logs")
                 status = created.get("connectionStatus") if isinstance(created, dict) else None
                 status_message = created.get("connectionMessage") if isinstance(created, dict) else ""
                 show_message(f"{message}. Статус: {status or 'unknown'} {status_message or ''}".strip())
@@ -976,39 +1052,36 @@ def main(page: ft.Page):
                 ),
             ),
             actions=[
-                ft.TextButton("Тест связи", on_click=test_connection),
+                ft.TextButton("Тест связи", on_click=async_click(lambda e: run_button_action(e, test_connection))),
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
-                ft.ElevatedButton("Сохранить", on_click=save),
+                ft.ElevatedButton("Сохранить", on_click=async_click(lambda e: run_button_action(e, save))),
             ],
         )
         show_dialog(dialog)
 
-    def move_device(device_id: int, room_id_value: str | None):
+    async def move_device(device_id: int, room_id_value: str | None):
         if not room_id_value:
             show_message("Выбери комнату")
             return
         try:
-            api_request("put", f"/api/devices/{device_id}/room", {"roomId": int(room_id_value)})
-            refresh_all()
-            build()
+            await api_request("put", f"/api/devices/{device_id}/room", {"roomId": int(room_id_value)})
+            await refresh_and_build("devices", "rooms", "logs")
             show_message("Привязка устройства обновлена")
         except Exception as ex:
             show_message(str(ex))
 
-    def toggle_device(device_id: int):
+    async def toggle_device(device_id: int):
         try:
-            api_request("put", f"/api/devices/{device_id}/toggle")
-            refresh_all()
-            build()
+            await api_request("put", f"/api/devices/{device_id}/toggle")
+            await refresh_and_build("devices", "logs")
         except Exception as ex:
             show_message(str(ex))
 
     def delete_device(device_id: int, device_name: str):
-        def action():
+        async def action():
             try:
-                api_request("delete", f"/api/devices/{device_id}")
-                refresh_all()
-                build()
+                await api_request("delete", f"/api/devices/{device_id}")
+                await refresh_and_build("devices", "rooms", "logs")
                 show_message(f"Устройство удалено: {device_name}")
             except Exception as ex:
                 show_message(str(ex))
@@ -1022,7 +1095,7 @@ def main(page: ft.Page):
         bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название комнаты", 2, 50, no_only_digits=True))
         bind_live_validator(zone_tf, lambda value: validators.optional_free_text(value, "Зона", 500))
 
-        def save(_):
+        async def save():
             try:
                 payload = {"name": (name_tf.value or "").strip(), "zone": (zone_tf.value or "").strip()}
                 ensure_controls_valid(
@@ -1032,14 +1105,13 @@ def main(page: ft.Page):
                     ]
                 )
                 if editing:
-                    api_request("put", f"/api/rooms/{room['id']}", payload)
+                    await api_request("put", f"/api/rooms/{room['id']}", payload)
                     message = "Комната обновлена"
                 else:
-                    api_request("post", "/api/rooms", payload)
+                    await api_request("post", "/api/rooms", payload)
                     message = "Комната создана"
                 close_dialog(dialog)
-                refresh_all()
-                build()
+                await refresh_and_build("rooms", "devices", "logs")
                 show_message(message)
             except Exception as ex:
                 show_message(str(ex))
@@ -1050,17 +1122,16 @@ def main(page: ft.Page):
             content=ft.Column(tight=True, spacing=10, controls=[name_tf, zone_tf]),
             actions=[
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
-                ft.ElevatedButton("Сохранить", on_click=save),
+                ft.ElevatedButton("Сохранить", on_click=async_click(lambda e: run_button_action(e, save))),
             ],
         )
         show_dialog(dialog)
 
     def delete_room(room_id: int, room_name: str):
-        def action():
+        async def action():
             try:
-                api_request("delete", f"/api/rooms/{room_id}")
-                refresh_all()
-                build()
+                await api_request("delete", f"/api/rooms/{room_id}")
+                await refresh_and_build("rooms", "devices", "logs")
                 show_message(f"Комната удалена: {room_name}")
             except Exception as ex:
                 show_message(str(ex))
@@ -1109,7 +1180,7 @@ def main(page: ft.Page):
                 )
             )
 
-        def save(_):
+        async def save():
             actions = []
             order = 1
             for item_device, dd in device_controls:
@@ -1134,14 +1205,13 @@ def main(page: ft.Page):
                     if not device_can_receive_commands(target_device):
                         raise ValueError("Сценарий: датчик или камера не могут быть целевым устройством включения/выключения")
                 if editing:
-                    api_request("put", f"/api/scenes/{scene['id']}", payload)
+                    await api_request("put", f"/api/scenes/{scene['id']}", payload)
                     message = "Сценарий обновлен"
                 else:
-                    api_request("post", "/api/scenes", payload)
+                    await api_request("post", "/api/scenes", payload)
                     message = "Сценарий создан"
                 close_dialog(dialog)
-                refresh_all()
-                build()
+                await refresh_and_build("scenes", "logs")
                 show_message(message)
             except Exception as ex:
                 show_message(str(ex))
@@ -1164,26 +1234,24 @@ def main(page: ft.Page):
             ),
             actions=[
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
-                ft.ElevatedButton("Сохранить", on_click=save),
+                ft.ElevatedButton("Сохранить", on_click=async_click(lambda e: run_button_action(e, save))),
             ],
         )
         show_dialog(dialog)
 
-    def run_scene(scene_id: int, scene_name: str):
+    async def run_scene(scene_id: int, scene_name: str):
         try:
-            api_request("post", f"/api/scenes/{scene_id}/run")
-            refresh_all()
-            build()
+            await api_request("post", f"/api/scenes/{scene_id}/run")
+            await refresh_and_build("devices", "scenes", "logs")
             show_message(f"Сценарий запущен: {scene_name}")
         except Exception as ex:
             show_message(str(ex))
 
     def delete_scene(scene_id: int, scene_name: str):
-        def action():
+        async def action():
             try:
-                api_request("delete", f"/api/scenes/{scene_id}")
-                refresh_all()
-                build()
+                await api_request("delete", f"/api/scenes/{scene_id}")
+                await refresh_and_build("scenes", "logs")
                 show_message(f"Сценарий удален: {scene_name}")
             except Exception as ex:
                 show_message(str(ex))
@@ -1212,7 +1280,7 @@ def main(page: ft.Page):
         bind_live_validator(event_type_tf, validators.validate_event_type)
         bind_live_validator(compare_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Сравнить с"))
 
-        def save(_):
+        async def save():
             try:
                 payload = {
                     "name": (name_tf.value or "").strip(),
@@ -1258,14 +1326,13 @@ def main(page: ft.Page):
                 if payload["actionKind"] == "scene_run" and not payload["actionSceneId"]:
                     raise ValueError("Сценарий: нужно выбрать сценарий")
                 if editing:
-                    api_request("put", f"/api/rules/{rule['id']}", payload)
+                    await api_request("put", f"/api/rules/{rule['id']}", payload)
                     message = "Правило обновлено"
                 else:
-                    api_request("post", "/api/rules", payload)
+                    await api_request("post", "/api/rules", payload)
                     message = "Правило создано"
                 close_dialog(dialog)
-                refresh_all()
-                build()
+                await refresh_and_build("rules", "logs")
                 show_message(message)
             except Exception as ex:
                 show_message(str(ex))
@@ -1291,28 +1358,26 @@ def main(page: ft.Page):
             ),
             actions=[
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
-                ft.ElevatedButton("Сохранить", on_click=save),
+                ft.ElevatedButton("Сохранить", on_click=async_click(lambda e: run_button_action(e, save))),
             ],
         )
         show_dialog(dialog)
 
     def delete_rule(rule_id: int, rule_name: str):
-        def action():
+        async def action():
             try:
-                api_request("delete", f"/api/rules/{rule_id}")
-                refresh_all()
-                build()
+                await api_request("delete", f"/api/rules/{rule_id}")
+                await refresh_and_build("rules", "logs")
                 show_message(f"Правило удалено: {rule_name}")
             except Exception as ex:
                 show_message(str(ex))
 
         confirm_action("Удалить правило", f"Удалить правило «{rule_name}»?", action)
 
-    def set_rule_enabled(rule_id: int, is_enabled: bool):
+    async def set_rule_enabled(rule_id: int, is_enabled: bool):
         try:
-            api_request("put", f"/api/rules/{rule_id}/enabled", {"isEnabled": is_enabled})
-            refresh_all()
-            build()
+            await api_request("put", f"/api/rules/{rule_id}/enabled", {"isEnabled": is_enabled})
+            await refresh_and_build("rules", "logs")
             show_message("Состояние правила обновлено")
         except Exception as ex:
             show_message(str(ex))
@@ -1341,7 +1406,7 @@ def main(page: ft.Page):
             box = ft.Checkbox(label=str(item.get("title")), value=int(item.get("value")) in selected_days)
             day_boxes.append((int(item.get("value")), box))
 
-        def save(_):
+        async def save():
             try:
                 payload = {
                     "name": (name_tf.value or "").strip(),
@@ -1376,14 +1441,13 @@ def main(page: ft.Page):
                 if payload["actionKind"] == "scene_run" and not payload["actionSceneId"]:
                     raise ValueError("Сценарий: нужно выбрать сценарий")
                 if editing:
-                    api_request("put", f"/api/schedules/{schedule['id']}", payload)
+                    await api_request("put", f"/api/schedules/{schedule['id']}", payload)
                     message = "Расписание обновлено"
                 else:
-                    api_request("post", "/api/schedules", payload)
+                    await api_request("post", "/api/schedules", payload)
                     message = "Расписание создано"
                 close_dialog(dialog)
-                refresh_all()
-                build()
+                await refresh_and_build("schedules", "logs")
                 show_message(message)
             except Exception as ex:
                 show_message(str(ex))
@@ -1409,37 +1473,34 @@ def main(page: ft.Page):
             ),
             actions=[
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
-                ft.ElevatedButton("Сохранить", on_click=save),
+                ft.ElevatedButton("Сохранить", on_click=async_click(lambda e: run_button_action(e, save))),
             ],
         )
         show_dialog(dialog)
 
     def delete_schedule(schedule_id: int, schedule_name: str):
-        def action():
+        async def action():
             try:
-                api_request("delete", f"/api/schedules/{schedule_id}")
-                refresh_all()
-                build()
+                await api_request("delete", f"/api/schedules/{schedule_id}")
+                await refresh_and_build("schedules", "logs")
                 show_message(f"Расписание удалено: {schedule_name}")
             except Exception as ex:
                 show_message(str(ex))
 
         confirm_action("Удалить расписание", f"Удалить расписание «{schedule_name}»?", action)
 
-    def set_schedule_enabled(schedule_id: int, is_enabled: bool):
+    async def set_schedule_enabled(schedule_id: int, is_enabled: bool):
         try:
-            api_request("put", f"/api/schedules/{schedule_id}/enabled", {"isEnabled": is_enabled})
-            refresh_all()
-            build()
+            await api_request("put", f"/api/schedules/{schedule_id}/enabled", {"isEnabled": is_enabled})
+            await refresh_and_build("schedules", "logs")
             show_message("Состояние расписания обновлено")
         except Exception as ex:
             show_message(str(ex))
 
-    def run_due_schedules():
+    async def run_due_schedules():
         try:
-            result = api_request("post", "/api/schedules/run-due") or {}
-            refresh_all()
-            build()
+            result = await api_request("post", "/api/schedules/run-due") or {}
+            await refresh_and_build("devices", "schedules", "scenes", "logs")
             show_message(str(result.get("message", "Проверка расписаний выполнена")))
         except Exception as ex:
             show_message(str(ex))
@@ -1453,7 +1514,7 @@ def main(page: ft.Page):
         bind_live_validator(value_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Значение"))
         bind_live_validator(message_tf, lambda value: validators.optional_free_text(value, "Сообщение", 1000))
 
-        def send_event(_):
+        async def send_event():
             try:
                 payload = {
                     "deviceId": int(source_device_dd.value or 0),
@@ -1475,14 +1536,13 @@ def main(page: ft.Page):
                         (message_tf, lambda value: validators.optional_free_text(value, "Сообщение", 1000)),
                     ]
                 )
-                result = api_request(
+                result = await api_request(
                     "post",
                     "/api/events",
                     payload,
                 ) or {}
                 close_dialog(dialog)
-                refresh_all()
-                build()
+                await refresh_and_build("devices", "rules", "logs")
                 count = len(result.get("triggeredRules", []) or [])
                 show_message(f"Событие отправлено. Сработало правил: {count}")
             except Exception as ex:
@@ -1494,7 +1554,7 @@ def main(page: ft.Page):
             content=ft.Column(tight=True, spacing=10, controls=[source_device_dd, event_type_tf, value_tf, message_tf]),
             actions=[
                 ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
-                ft.ElevatedButton("Отправить", on_click=send_event),
+                ft.ElevatedButton("Отправить", on_click=async_click(lambda e: run_button_action(e, send_event))),
             ],
         )
         show_dialog(dialog)
@@ -1531,7 +1591,7 @@ def main(page: ft.Page):
                             ft.Row(
                                 spacing=10,
                                 controls=[
-                                    ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()),
+                                    ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog()))),
                                     ft.OutlinedButton(
                                         "Отправить событие",
                                         icon=ft.Icons.SENSORS,
@@ -1570,9 +1630,9 @@ def main(page: ft.Page):
             room_dd = dropdown(value=str(device.get("roomId")) if device.get("roomId") is not None else None, options=room_options(), width=220)
             action_buttons = []
             if device_type_capabilities(device.get("type")).get("canToggle", True):
-                action_buttons.append(ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=lambda e, device_id=device["id"]: toggle_device(device_id)))
+                action_buttons.append(ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=async_click(lambda e, device_id=device["id"]: run_button_action(e, lambda: toggle_device(device_id)))))
             action_buttons.extend([
-                ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=lambda e, d=device: open_device_dialog(d)),
+                ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=async_click(lambda e, d=device: run_button_action(e, lambda: open_device_dialog(d)))),
                 ft.OutlinedButton("Удалить", icon=ft.Icons.DELETE_OUTLINE, on_click=lambda e, d=device: delete_device(int(d["id"]), str(d.get("name", "Устройство")))),
             ])
             device_cards.append(
@@ -1608,7 +1668,7 @@ def main(page: ft.Page):
                         spacing=10,
                         controls=[
                             room_dd,
-                            ft.OutlinedButton("Переместить", icon=ft.Icons.SWAP_HORIZ, on_click=lambda e, device_id=device["id"], dd=room_dd: move_device(int(device_id), dd.value)),
+                            ft.OutlinedButton("Переместить", icon=ft.Icons.SWAP_HORIZ, on_click=async_click(lambda e, device_id=device["id"], dd=room_dd: run_button_action(e, lambda: move_device(int(device_id), dd.value)))),
                         ],
                     ),
                 )
@@ -1621,7 +1681,7 @@ def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Устройства", size=22, weight=ft.FontWeight.BOLD), TM("Подключение реальных устройств, тест связи и управление")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog()))), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build(show_toast=True))))]),
                     ],
                 ),
                 *(device_cards or [card(TM("Устройств пока нет"))]),
@@ -1675,7 +1735,7 @@ def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Комнаты и зоны", size=22, weight=ft.FontWeight.BOLD), TM("CRUD комнат и группировка устройств")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rooms", "devices", show_toast=True))))]),
                     ],
                 ),
                 *(room_cards or [card(TM("Комнат пока нет"))]),
@@ -1715,7 +1775,7 @@ def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             ft.Column(spacing=2, controls=[TM(f"Последний запуск: {fmt_dt(scene.get('lastRunAt'))}", size=12), TM(f"Статус: {scene.get('lastRunStatus') or 'не запускался'}", size=12), TM(scene.get("lastRunMessage") or "", size=12)]),
-                            ft.ElevatedButton("Запустить", icon=ft.Icons.PLAY_ARROW, on_click=lambda e, s=scene: run_scene(int(s["id"]), str(s.get("name", "Сценарий")))),
+                            ft.ElevatedButton("Запустить", icon=ft.Icons.PLAY_ARROW, on_click=async_click(lambda e, s=scene: run_button_action(e, lambda: run_scene(int(s["id"]), str(s.get("name", "Сценарий")))))),
                         ],
                     ),
                 )
@@ -1729,7 +1789,7 @@ def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Сценарии", size=22, weight=ft.FontWeight.BOLD), TM("Ручные сценарии, которые могут запускаться и из правил, и по расписанию")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("scenes", show_toast=True))))]),
                     ],
                 ),
                 *(scene_cards or [card(TM("Сценариев пока нет"))]),
@@ -1755,7 +1815,7 @@ def main(page: ft.Page):
                     TM(action_text, size=12),
                     TM(f"Последнее срабатывание: {fmt_dt(rule.get('lastTriggeredAt'))}", size=12),
                     TM(rule.get("lastTriggerMessage") or "", size=12),
-                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not rule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if rule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=lambda e, rid=rule["id"], enabled=not bool(rule.get("isEnabled")): set_rule_enabled(int(rid), enabled)), ft.OutlinedButton("Тест событием", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog())]),
+                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not rule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if rule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, rid=rule["id"], enabled=not bool(rule.get("isEnabled")): run_button_action(e, lambda: set_rule_enabled(int(rid), enabled)))), ft.OutlinedButton("Тест событием", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog())]),
                 )
             )
 
@@ -1767,7 +1827,7 @@ def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Правила", size=22, weight=ft.FontWeight.BOLD), TM("Если событие датчика подходит под условие, выполняется действие или сценарий")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog()), ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog()), ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rules", show_toast=True))))]),
                     ],
                 ),
                 *(rule_cards or [card(TM("Правил пока нет"))]),
@@ -1793,7 +1853,7 @@ def main(page: ft.Page):
                     TM(action_text, size=12),
                     TM(f"Последний запуск: {fmt_dt(schedule.get('lastRunAt'))}", size=12),
                     TM(schedule.get("lastRunMessage") or "", size=12),
-                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not schedule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if schedule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=lambda e, sid=schedule["id"], enabled=not bool(schedule.get("isEnabled")): set_schedule_enabled(int(sid), enabled)), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=lambda e: run_due_schedules())]),
+                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not schedule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if schedule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, sid=schedule["id"], enabled=not bool(schedule.get("isEnabled")): run_button_action(e, lambda: set_schedule_enabled(int(sid), enabled)))), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules)))]),
                 )
             )
 
@@ -1805,7 +1865,7 @@ def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Расписание", size=22, weight=ft.FontWeight.BOLD), TM("Автоматический запуск действий и сценариев по времени")]),
-                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog()), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=lambda e: run_due_schedules()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()))]),
+                        ft.Row(spacing=10, controls=[ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog()), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules))), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("schedules", show_toast=True))))]),
                     ],
                 ),
                 *(schedule_cards or [card(TM("Расписаний пока нет"))]),
@@ -1821,7 +1881,7 @@ def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("История и логирование", size=22, weight=ft.FontWeight.BOLD), TM("Логи backend, правила, расписания и результаты сценариев")]),
-                        ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build())),
+                        ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("logs", show_toast=True)))),
                     ],
                 ),
                 *([
@@ -1879,7 +1939,7 @@ def main(page: ft.Page):
         page.bgcolor = c("bg")
         page.navigation_bar = nav
         nav.selected_index = state["tab"]
-        page.appbar = ft.AppBar(bgcolor=c("nav"), title=ft.Text("CALHouse", color=c("text"), weight=ft.FontWeight.BOLD), actions=[ft.IconButton(ft.Icons.REFRESH, on_click=lambda e: (refresh_all(True), build()), icon_color=c("text"))])
+        page.appbar = ft.AppBar(bgcolor=c("nav"), title=ft.Text("CALHouse", color=c("text"), weight=ft.FontWeight.BOLD), actions=[ft.IconButton(ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build(show_toast=True))), icon_color=c("text"))])
         views = {
             0: home_view,
             1: devices_view,
@@ -1895,7 +1955,7 @@ def main(page: ft.Page):
         page.add(content)
         page.update()
 
-    refresh_all()
+    await refresh_all()
     build()
 
 
