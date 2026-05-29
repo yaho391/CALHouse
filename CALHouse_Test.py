@@ -97,9 +97,9 @@ async def main(page: ft.Page):
     def palette() -> dict[str, str]:
         if state["dark"]:
             return {
-                "bg": "#0b1020",
+                "bg": "#0d200b",
                 "card": "#111827",
-                "border": "#1f2a44",
+                "border": "#142711",
                 "text": "#f8fafc",
                 "muted": "#94a3b8",
                 "field": "#0f172a",

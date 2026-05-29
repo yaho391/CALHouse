@@ -703,6 +703,16 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
                 : $"HTTP устройство недоступно ({(int)response.StatusCode})";
             return response.IsSuccessStatusCode;
         }
+        catch (TaskCanceledException ex)
+        {
+            message = $"HTTP connection timeout: {ex.Message}";
+            return false;
+        }
+        catch (TimeoutException ex)
+        {
+            message = $"HTTP connection timeout: {ex.Message}";
+            return false;
+        }
         catch (Exception ex)
         {
             message = $"Не удалось проверить HTTP подключение: {ex.Message}";
@@ -720,7 +730,12 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         {
             using var client = new TcpClient();
             var connectTask = client.ConnectAsync(host, port);
-            var finished = connectTask.Wait(TimeSpan.FromSeconds(3));
+            var finished = Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) == 0;
+            if (connectTask.IsFaulted)
+            {
+                throw connectTask.Exception?.GetBaseException() ?? new SocketException();
+            }
+
             if (!finished || !client.Connected)
             {
                 message = "Таймаут при сетевой проверке";
@@ -1027,17 +1042,21 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             }
 
             using var response = client.Send(request);
-            var responseBody = response.Content.ReadAsStringAsync().GetAwaiter().GetResult();
             var safeUrl = RedactSensitiveText(url);
-            var shortBody = RedactSensitiveText(Shorten(responseBody, 180));
-            var message = string.IsNullOrWhiteSpace(shortBody)
-                ? $"HTTP {method} {safeUrl} -> {(int)response.StatusCode}"
-                : $"HTTP {method} {safeUrl} -> {(int)response.StatusCode}: {shortBody}";
+            var message = $"HTTP {method} {safeUrl} -> {(int)response.StatusCode}";
 
             return new DeviceCommandResult(
                 response.IsSuccessStatusCode,
                 response.IsSuccessStatusCode ? "connected" : "no_connection",
                 message);
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"HTTP command timeout: {ex.Message}");
+        }
+        catch (TimeoutException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"HTTP command timeout: {ex.Message}");
         }
         catch (Exception ex)
         {

@@ -5,11 +5,13 @@ namespace CalHouse.Api.Services;
 public sealed class ScheduleBackgroundService : BackgroundService
 {
     private readonly DeviceStore _store;
+    private readonly DeviceCommandQueue _queue;
     private readonly ILogger<ScheduleBackgroundService> _logger;
 
-    public ScheduleBackgroundService(DeviceStore store, ILogger<ScheduleBackgroundService> logger)
+    public ScheduleBackgroundService(DeviceStore store, DeviceCommandQueue queue, ILogger<ScheduleBackgroundService> logger)
     {
         _store = store;
+        _queue = queue;
         _logger = logger;
     }
 
@@ -19,15 +21,15 @@ public sealed class ScheduleBackgroundService : BackgroundService
         {
             try
             {
-                var result = _store.RunDueSchedules();
+                var result = _store.QueueDueSchedules(_queue);
                 if (result.Runs.Count > 0)
                 {
-                    _logger.LogInformation("Запущено расписаний: {Count} для слота {Slot}", result.Runs.Count, result.Slot);
+                    _logger.LogInformation("Queued schedules: {Count} for slot {Slot}", result.Runs.Count, result.Slot);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Ошибка фоновой проверки расписаний");
+                _logger.LogError(ex, "Scheduled background check failed");
             }
 
             await Task.Delay(TimeSpan.FromSeconds(20), stoppingToken);
