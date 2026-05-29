@@ -97,14 +97,14 @@ async def main(page: ft.Page):
     def palette() -> dict[str, str]:
         if state["dark"]:
             return {
-                "bg": "#0d200b",
-                "card": "#111827",
-                "border": "#142711",
+                "bg": "#191b21",
+                "card": "#272b33",
+                "border": "#181c24",
                 "text": "#f8fafc",
                 "muted": "#94a3b8",
-                "field": "#0f172a",
-                "nav": "#111827",
-                "accent": "#2563eb",
+                "field": "#4a4a4a",
+                "nav": "#ffffff",
+                "accent": "#14b385",
             }
         return {
             "bg": "#f3f4f6",
@@ -114,7 +114,7 @@ async def main(page: ft.Page):
             "muted": "#64748b",
             "field": "#eef2f7",
             "nav": "#ffffff",
-            "accent": "#2563eb",
+            "accent": "#14b385",
         }
 
     def c(name: str) -> str:
@@ -1579,13 +1579,13 @@ async def main(page: ft.Page):
                 ft.Container(
                     padding=18,
                     border_radius=18,
-                    gradient=ft.LinearGradient(colors=["#2563eb", "#9333ea"]),
+                    gradient=ft.LinearGradient(colors=["#1ab869", "#269ba6"]),
                     content=ft.Column(
                         spacing=8,
                         controls=[
                             T("CALHouse", size=26, weight=ft.FontWeight.BOLD, color="#ffffff"),
                             ft.Text(
-                                "Устройства теперь можно подключать как реальные: с идентификатором, провайдером, протоколом, тестом связи, правилами и расписаниями.",
+                                "Привет)))))",
                                 color="#e0e7ff",
                             ),
                             ft.Row(
