@@ -1,5 +1,7 @@
 # CALHouse / Система управления умным домом
-
+# C - Calm
+# A - Adaptive
+# L - Live
 Проект состоит из двух основных частей:
 
 - **backend**: `backend/CalHouse.Api` — ASP.NET Core Minimal API (`net8.0`)
