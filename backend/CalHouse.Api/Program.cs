@@ -5,6 +5,8 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddSingleton<DeviceCatalogService>();
 builder.Services.AddSingleton<DeviceStore>();
+builder.Services.AddSingleton<DeviceCommandQueue>();
+builder.Services.AddHostedService<DeviceCommandBackgroundService>();
 builder.Services.AddHostedService<ScheduleBackgroundService>();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
@@ -71,11 +73,11 @@ api.MapPut("/devices/{id:int}", (int id, UpdateDeviceRequest request, DeviceStor
     request.Manufacturer,
     request.Model,
     request.Connection))));
-api.MapPut("/devices/{id:int}/toggle", (int id, DeviceStore store) => Handle(() => Results.Ok(store.ToggleDevice(id))));
+api.MapPut("/devices/{id:int}/toggle", (int id, DeviceStore store, DeviceCommandQueue queue) => Handle(() => Results.Ok(store.QueueToggleDevice(id, queue))));
 api.MapPut("/devices/{id:int}/room", (int id, AssignDeviceRoomRequest request, DeviceStore store) => Handle(() => Results.Ok(store.AssignDeviceToRoom(id, request.RoomId))));
 api.MapDelete("/devices/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.DeleteDevice(id))));
 api.MapPost("/devices/validate-connection", (ValidateConnectionRequest request, DeviceStore store) => Handle(() => Results.Ok(store.ValidateConnection(request.Provider, request.Protocol, request.Connection))));
-api.MapPost("/events", (DeviceEventRequest request, DeviceStore store) => Handle(() => Results.Ok(store.ProcessIncomingEvent(request.DeviceId, request.DeviceExternalId, request.EventType, request.Value, request.Message))));
+api.MapPost("/events", (DeviceEventRequest request, DeviceStore store, DeviceCommandQueue queue) => Handle(() => Results.Ok(store.ProcessIncomingEventQueued(request.DeviceId, request.DeviceExternalId, request.EventType, request.Value, request.Message, queue))));
 
 api.MapGet("/rooms", (DeviceStore store) => Results.Ok(store.GetAllRooms()));
 api.MapGet("/rooms/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.GetRoom(id))));
@@ -119,7 +121,7 @@ api.MapDelete("/scenes/{id:int}", (int id, DeviceStore store) => Handle(() =>
     store.DeleteScene(id);
     return Results.NoContent();
 }));
-api.MapPost("/scenes/{id:int}/run", (int id, DeviceStore store) => Handle(() => Results.Ok(store.RunScene(id))));
+api.MapPost("/scenes/{id:int}/run", (int id, DeviceStore store, DeviceCommandQueue queue) => Handle(() => Results.Ok(store.QueueSceneRun(id, queue))));
 
 api.MapGet("/rules", (DeviceStore store) => Results.Ok(store.GetAllRules()));
 api.MapGet("/rules/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.GetRule(id))));
@@ -189,7 +191,7 @@ api.MapPut("/schedules/{id:int}", (int id, UpdateScheduleRequest request, Device
     request.ActionTargetIsOn,
     request.ActionSceneId))));
 api.MapPut("/schedules/{id:int}/enabled", (int id, SetEnabledRequest request, DeviceStore store) => Handle(() => Results.Ok(store.SetScheduleEnabled(id, request.IsEnabled))));
-api.MapPost("/schedules/run-due", (DeviceStore store) => Handle(() => Results.Ok(store.RunDueSchedules())));
+api.MapPost("/schedules/run-due", (DeviceStore store, DeviceCommandQueue queue) => Handle(() => Results.Ok(store.QueueDueSchedules(queue))));
 api.MapDelete("/schedules/{id:int}", (int id, DeviceStore store) => Handle(() =>
 {
     store.DeleteSchedule(id);
