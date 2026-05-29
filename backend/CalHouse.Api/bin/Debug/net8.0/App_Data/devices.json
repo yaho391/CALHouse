@@ -77,6 +77,27 @@
     "connection": {}
   },
   {
+    "id": 16,
+    "name": "\u0420\u043E\u0437\u0435\u0442\u043A\u0430 \u043A\u043E\u043C\u043D\u0430\u0442\u0430",
+    "room": "\u043A\u043E\u043C\u043D\u0430\u0442\u0430 1",
+    "isOn": true,
+    "type": "socket",
+    "provider": "mqtt",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {
+      "host": "192.168.1.10",
+      "port": "1883",
+      "topic": "cmnd/sonoff_s26_room/POWER",
+      "username": "calhouse",
+      "password": "calhouse123",
+      "state_topic": "stat/sonoff_s26_room/POWER"
+    }
+  },
+  {
     "id": 1,
     "name": "\u0422\u0435\u0440\u043C\u043E\u0441\u0442\u0430\u0442",
     "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",

@@ -1,10 +1,8 @@
 import flet as ft
-import json
-import re
 import requests
 from datetime import datetime
 from typing import Any
-from urllib.parse import urlparse
+import validation as validators
 
 API_BASE = "http://localhost:5000"
 DEBUG_DEVICE_FORM = False
@@ -201,118 +199,69 @@ def main(page: ft.Page):
         except requests.RequestException as ex:
             raise RuntimeError(f"API недоступен: {ex}") from ex
 
-    def require_text(value: Any, label: str, max_length: int = 120) -> str:
-        clean = str(value or "").strip()
-        if not clean:
-            raise ValueError(f"{label}: поле обязательно")
-        if len(clean) > max_length:
-            raise ValueError(f"{label}: максимум {max_length} символов")
-        return clean
+    def require_text(value: Any, label: str, max_length: int = 80) -> str:
+        return validators.require_safe_text(value, label, 2, max_length)
 
-    def optional_text(value: Any, label: str, max_length: int = 120) -> str:
-        clean = str(value or "").strip()
-        if len(clean) > max_length:
-            raise ValueError(f"{label}: максимум {max_length} символов")
-        return clean
+    def optional_text(value: Any, label: str, max_length: int = 500) -> str:
+        return validators.optional_free_text(value, label, max_length)
 
-    def require_selected(value: Any, label: str) -> str:
-        clean = str(value or "").strip()
-        if not clean:
-            raise ValueError(f"{label}: нужно выбрать значение")
-        return clean
+    def require_selected(value: Any, label: str, allowed: set[str] | None = None) -> str:
+        return validators.require_selected(value, label, allowed)
 
     def require_external_id(value: Any) -> str:
-        clean = require_text(value, "Идентификатор", 100)
-        if not re.fullmatch(r"[A-Za-z0-9._:-]+", clean):
-            raise ValueError("Идентификатор: разрешены только латиница, цифры, точка, дефис, подчёркивание и двоеточие")
-        return clean
+        return validators.require_identifier(value, "Идентификатор")
 
-    def require_code_value(value: Any, label: str, max_length: int = 120) -> str:
-        clean = require_text(value, label, max_length)
-        if not re.fullmatch(r"[A-Za-z0-9_.:-]+", clean):
-            raise ValueError(f"{label}: разрешены только латиница, цифры, точка, дефис, подчёркивание и двоеточие")
-        return clean
+    def require_code_value(value: Any, label: str, max_length: int = 80) -> str:
+        return validators.require_code(value, label, max_length)
 
     def require_hhmm(value: Any) -> str:
-        clean = require_text(value, "Время", 5)
-        if not re.fullmatch(r"\d{2}:\d{2}", clean):
-            raise ValueError("Время: нужен формат HH:mm")
-        hour, minute = (int(part) for part in clean.split(":"))
-        if hour > 23 or minute > 59:
-            raise ValueError("Время: часы 00-23, минуты 00-59")
-        return clean
-
-    def validate_url_value(value: str, label: str):
-        sample = (
-            value.replace("{{isOn}}", "true")
-            .replace("{isOn}", "true")
-            .replace("{{value}}", "true")
-            .replace("{value}", "true")
-            .replace("{{state}}", "ON")
-            .replace("{state}", "ON")
-            .replace("{{stateLower}}", "on")
-            .replace("{stateLower}", "on")
-        )
-        if not sample.lower().startswith(("http://", "https://")):
-            sample = f"http://{sample}"
-        parsed = urlparse(sample)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ValueError(f"{label}: нужен абсолютный HTTP/HTTPS URL")
+        return validators.require_hhmm(value)
 
     def validate_connection_values(connection: dict[str, str], schema_fields: dict[str, dict[str, Any]] | None = None):
-        schema_fields = schema_fields or {}
-        for name, field_def in schema_fields.items():
-            if field_def.get("required") and not str(connection.get(name, "")).strip():
-                label = str(field_def.get("label") or CONNECTION_FIELD_LABELS.get(name, name))
-                raise ValueError(f"{label}: поле обязательно")
+        validators.validate_connection_values(connection, schema_fields)
 
-        for key, value in connection.items():
-            if len(key) > 120 or re.search(r"\s", key):
-                raise ValueError("Имя поля подключения некорректно")
-            if len(value) > 8000:
-                raise ValueError(f"{CONNECTION_FIELD_LABELS.get(key, key)}: максимум 8000 символов")
+    def validate_control(control: ft.Control, validator) -> bool:
+        try:
+            validator(getattr(control, "value", None))
+            if hasattr(control, "error_text"):
+                control.error_text = None
+            ok = True
+        except Exception as ex:
+            if hasattr(control, "error_text"):
+                control.error_text = str(ex)
+            ok = False
+        try:
+            if getattr(control, "page", None):
+                control.update()
+        except Exception:
+            pass
+        return ok
 
-        if "host" in connection:
-            host = connection["host"]
-            if len(host) > 120 or "://" in host or "/" in host or re.search(r"\s", host):
-                raise ValueError("Host / IP: укажи host или IP без протокола, пути и пробелов")
+    def bind_live_validator(control: ft.Control, validator):
+        def on_change(e):
+            validate_control(e.control, validator)
 
-        if "port" in connection:
-            try:
-                port = int(connection["port"])
-            except ValueError as ex:
-                raise ValueError("Port: нужно число от 1 до 65535") from ex
-            if port < 1 or port > 65535:
-                raise ValueError("Port: нужно число от 1 до 65535")
+        control.on_change = on_change
+        return control
 
-        for key in ("url", "snapshot_url"):
-            if key in connection:
-                validate_url_value(connection[key], CONNECTION_FIELD_LABELS.get(key, key))
+    def bind_digits_only(control: ft.TextField, validator):
+        def on_change(e):
+            raw = str(e.control.value or "")
+            digits = "".join(ch for ch in raw if ch.isdigit())
+            if raw != digits:
+                e.control.value = digits
+            validate_control(e.control, validator)
 
-        if "method" in connection:
-            method = connection["method"].upper()
-            if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD"}:
-                raise ValueError("HTTP-метод: допустимы GET, POST, PUT, PATCH, DELETE, HEAD")
+        control.on_change = on_change
+        return control
 
-        if "headers" in connection:
-            try:
-                headers = json.loads(connection["headers"])
-            except json.JSONDecodeError as ex:
-                raise ValueError("Заголовки JSON: нужен валидный JSON-объект") from ex
-            if not isinstance(headers, dict):
-                raise ValueError("Заголовки JSON: нужен JSON-объект")
-            for header_name, header_value in headers.items():
-                if not str(header_name).strip() or re.search(r"[\s\r\n]", str(header_name)):
-                    raise ValueError("Заголовки JSON: некорректное имя заголовка")
-                if "\r" in str(header_value) or "\n" in str(header_value):
-                    raise ValueError("Заголовки JSON: значения не должны содержать переносы строк")
-
-        if "entity_id" in connection and "." not in connection["entity_id"]:
-            raise ValueError("Entity ID: нужен формат domain.object_id, например light.kitchen")
-
-        for key in ("topic", "state_topic"):
-            if key in connection and (connection[key].startswith("/") or connection[key].endswith("/") or any(ord(ch) < 32 for ch in connection[key])):
-                raise ValueError(f"{CONNECTION_FIELD_LABELS.get(key, key)}: topic не должен начинаться/заканчиваться slash и не должен содержать управляющие символы")
+    def ensure_controls_valid(items: list[tuple[ft.Control, Any]]):
+        first_error = None
+        for control, validator in items:
+            if not validate_control(control, validator) and first_error is None:
+                first_error = getattr(control, "error_text", None)
+        if first_error:
+            raise ValueError(first_error)
 
     def load_catalog(show_error: bool = False):
         try:
@@ -524,6 +473,17 @@ def main(page: ft.Page):
             return "Запустить сценарий"
         return str(kind or "—")
 
+    def device_can_receive_commands(device: dict[str, Any]) -> bool:
+        capabilities = device_type_capabilities(device.get("type"))
+        return bool(capabilities.get("canReceiveCommands", capabilities.get("canToggle", True)) or capabilities.get("canToggle", False))
+
+    def find_device_by_id(device_id: Any) -> dict[str, Any] | None:
+        try:
+            target_id = int(device_id)
+        except (TypeError, ValueError):
+            return None
+        return next((item for item in data["devices"] if int(item.get("id", 0)) == target_id), None)
+
     def schedule_days_title(days: list[int] | None) -> str:
         days = days or []
         lookup = {int(item["value"]): str(item["title"]) for item in schedule_days()}
@@ -612,6 +572,13 @@ def main(page: ft.Page):
         room_dd = dropdown(label="Комната из списка", value=str(device.get("roomId")) if editing and device.get("roomId") is not None else None, options=room_options())
         new_room_tf = field(label="Или новая комната", value="" if editing else (device or {}).get("room", ""), hint_text="Оставь пустым, если выбрал комнату выше")
         is_on_sw = ft.Switch(label="Включить сразу", value=bool((device or {}).get("isOn", False)))
+
+        bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название", 2, 80))
+        bind_live_validator(external_id_tf, validators.require_identifier)
+        bind_live_validator(manufacturer_tf, lambda value: validators.optional_safe_text(value, "Производитель", 2, 50))
+        bind_live_validator(model_tf, lambda value: validators.optional_safe_text(value, "Модель", 1, 80))
+        bind_live_validator(channel_tf, lambda value: validators.optional_code(value, "Канал", 50))
+        bind_live_validator(new_room_tf, lambda value: validators.optional_safe_text(value, "Новая комната", 2, 50, no_only_digits=True))
 
         existing_conn = (device or {}).get("connection", {}) or {}
         connection_controls: dict[str, ft.TextField] = {}
@@ -737,7 +704,18 @@ def main(page: ft.Page):
             }
             if multiline:
                 kwargs["min_lines"] = 3
-            return field(**kwargs)
+            control = field(**kwargs)
+
+            def validate_connection_field(value: Any, field=field_def, field_name=name):
+                clean_value = validators.clean(value)
+                validators.validate_connection_values({field_name: clean_value} if clean_value else {}, {field_name: field})
+                return clean_value
+
+            if name == "port":
+                bind_digits_only(control, validate_connection_field)
+            else:
+                bind_live_validator(control, validate_connection_field)
+            return control
 
         def apply_form_schema(preferred_provider: Any | None = None, source: str = "apply"):
             nonlocal active_schema_names, active_schema_defs
@@ -807,6 +785,20 @@ def main(page: ft.Page):
                     connection[key] = clean
             return connection
 
+        def ensure_connection_controls_valid():
+            first_error = None
+            for name, control in connection_controls.items():
+                field_def = active_schema_defs.get(name, {"name": name, "label": CONNECTION_FIELD_LABELS.get(name, name)})
+
+                def check(value: Any, field=field_def, field_name=name):
+                    clean_value = validators.clean(value)
+                    validators.validate_connection_values({field_name: clean_value} if clean_value else {}, {field_name: field})
+
+                if not validate_control(control, check) and first_error is None:
+                    first_error = control.error_text
+            if first_error:
+                raise ValueError(first_error)
+
         def on_type_change(e):
             provider_before = provider_dd.value
             raw_value = event_value(e, type_dd.value)
@@ -868,6 +860,8 @@ def main(page: ft.Page):
 
         def test_connection(_):
             try:
+                ensure_connection_controls_valid()
+                validate_connection_values(collect_connection(), active_schema_defs)
                 result = api_request(
                     "post",
                     "/api/devices/validate-connection",
@@ -905,19 +899,36 @@ def main(page: ft.Page):
                     "model": (model_tf.value or "").strip(),
                     "connection": collect_connection(),
                 }
-                require_text(payload["name"], "Название", 120)
+                ensure_controls_valid(
+                    [
+                        (name_tf, lambda value: validators.require_safe_text(value, "Название", 2, 80)),
+                        (external_id_tf, validators.require_identifier),
+                        (manufacturer_tf, lambda value: validators.optional_safe_text(value, "Производитель", 2, 50)),
+                        (model_tf, lambda value: validators.optional_safe_text(value, "Модель", 1, 80)),
+                        (channel_tf, lambda value: validators.optional_code(value, "Канал", 50)),
+                        (new_room_tf, lambda value: validators.optional_safe_text(value, "Новая комната", 2, 50, no_only_digits=True)),
+                    ]
+                )
+                validators.require_safe_text(payload["name"], "Название", 2, 80)
                 require_external_id(payload["externalId"])
-                optional_text(payload["manufacturer"], "Производитель", 120)
-                optional_text(payload["model"], "Модель", 120)
-                require_selected(payload["type"], "Тип устройства")
-                require_selected(payload["provider"], "Провайдер")
+                validators.optional_safe_text(payload["manufacturer"], "Производитель", 2, 50)
+                validators.optional_safe_text(payload["model"], "Модель", 1, 80)
+                require_selected(payload["type"], "Тип устройства", set(device_types()))
+                require_selected(payload["provider"], "Провайдер", {provider_code(item.get("code", item.get("key", ""))) for item in providers_for_type(payload["type"])})
                 require_selected(payload["protocol"], "Протокол")
-                optional_text(payload["channel"], "Канал", 120)
+                validators.optional_code(payload["channel"], "Канал", 50)
+                if payload["roomId"] and payload["room"]:
+                    raise ValueError("Комната: выбери комнату из списка или укажи новую, но не оба варианта сразу")
                 if not payload["roomId"] and not payload["room"]:
                     raise ValueError("Комната: выбери комнату из списка или укажи новую")
-                optional_text(payload["room"], "Новая комната", 120)
+                validators.optional_safe_text(payload["room"], "Новая комната", 2, 50, no_only_digits=True)
+                ensure_connection_controls_valid()
                 validate_connection_values(payload["connection"], active_schema_defs)
-                print("[device-save] payload=", payload, flush=True)
+                if DEBUG_DEVICE_FORM:
+                    print(
+                        f"[device-save] type={payload['type']!r} provider={payload['provider']!r} connection_keys={sorted(payload['connection'].keys())!r}",
+                        flush=True,
+                    )
                 if editing:
                     created = api_request("put", f"/api/devices/{device['id']}", payload)
                     message = "Устройство обновлено"
@@ -1008,12 +1019,18 @@ def main(page: ft.Page):
         editing = room is not None
         name_tf = field(label="Название комнаты", value=(room or {}).get("name", ""))
         zone_tf = field(label="Зона", value=(room or {}).get("zone", ""), hint_text="Например: Первый этаж")
+        bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название комнаты", 2, 50, no_only_digits=True))
+        bind_live_validator(zone_tf, lambda value: validators.optional_free_text(value, "Зона", 500))
 
         def save(_):
             try:
                 payload = {"name": (name_tf.value or "").strip(), "zone": (zone_tf.value or "").strip()}
-                require_text(payload["name"], "Название комнаты", 120)
-                optional_text(payload["zone"], "Зона", 120)
+                ensure_controls_valid(
+                    [
+                        (name_tf, lambda value: validators.require_safe_text(value, "Название комнаты", 2, 50, no_only_digits=True)),
+                        (zone_tf, lambda value: validators.optional_free_text(value, "Зона", 500)),
+                    ]
+                )
                 if editing:
                     api_request("put", f"/api/rooms/{room['id']}", payload)
                     message = "Комната обновлена"
@@ -1059,6 +1076,8 @@ def main(page: ft.Page):
 
         name_tf = field(label="Название сценария", value=(scene or {}).get("name", ""))
         description_tf = field(label="Описание", multiline=True, min_lines=2, max_lines=4, value=(scene or {}).get("description", ""))
+        bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название сценария", 3, 80))
+        bind_live_validator(description_tf, lambda value: validators.optional_free_text(value, "Описание сценария", 500))
 
         device_controls: list[tuple[dict[str, Any], ft.Dropdown]] = []
         action_rows: list[ft.Control] = []
@@ -1100,10 +1119,20 @@ def main(page: ft.Page):
                 order += 1
             try:
                 payload = {"name": (name_tf.value or "").strip(), "description": (description_tf.value or "").strip(), "actions": actions}
-                require_text(payload["name"], "Название сценария", 120)
-                optional_text(payload["description"], "Описание сценария", 1000)
+                ensure_controls_valid(
+                    [
+                        (name_tf, lambda value: validators.require_safe_text(value, "Название сценария", 3, 80)),
+                        (description_tf, lambda value: validators.optional_free_text(value, "Описание сценария", 500)),
+                    ]
+                )
                 if not actions:
                     raise ValueError("Сценарий: добавьте хотя бы одно действие")
+                for action in actions:
+                    target_device = find_device_by_id(action["deviceId"])
+                    if target_device is None:
+                        raise ValueError("Сценарий: устройство не найдено")
+                    if not device_can_receive_commands(target_device):
+                        raise ValueError("Сценарий: датчик или камера не могут быть целевым устройством включения/выключения")
                 if editing:
                     api_request("put", f"/api/scenes/{scene['id']}", payload)
                     message = "Сценарий обновлен"
@@ -1178,6 +1207,10 @@ def main(page: ft.Page):
             options=[ft.dropdown.Option("on", "Включить"), ft.dropdown.Option("off", "Выключить")],
         )
         action_scene_dd = dropdown(label="Или сценарий", value=str(rule.get("actionSceneId")) if editing and rule.get("actionSceneId") is not None else None, options=scene_options())
+        bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название правила", 3, 80))
+        bind_live_validator(description_tf, lambda value: validators.optional_free_text(value, "Описание правила", 500))
+        bind_live_validator(event_type_tf, validators.validate_event_type)
+        bind_live_validator(compare_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Сравнить с"))
 
         def save(_):
             try:
@@ -1194,16 +1227,34 @@ def main(page: ft.Page):
                     "actionTargetIsOn": True if action_state_dd.value == "on" else False,
                     "actionSceneId": int(action_scene_dd.value) if action_scene_dd.value else None,
                 }
-                require_text(payload["name"], "Название правила", 120)
-                optional_text(payload["description"], "Описание правила", 1000)
+                ensure_controls_valid(
+                    [
+                        (name_tf, lambda value: validators.require_safe_text(value, "Название правила", 3, 80)),
+                        (description_tf, lambda value: validators.optional_free_text(value, "Описание правила", 500)),
+                        (event_type_tf, validators.validate_event_type),
+                        (compare_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Сравнить с")),
+                    ]
+                )
                 if not payload["triggerDeviceId"]:
                     raise ValueError("Датчик / источник: нужно выбрать устройство")
-                require_code_value(payload["eventType"], "Тип события", 120)
-                require_selected(payload["comparisonOperator"], "Оператор")
-                require_text(payload["compareValue"], "Сравнить с", 500)
-                require_selected(payload["actionKind"], "Тип действия")
+                source_device = find_device_by_id(payload["triggerDeviceId"])
+                if source_device is None:
+                    raise ValueError("Датчик / источник: устройство не найдено")
+                if not device_type_capabilities(source_device.get("type")).get("canEmitEvents", True):
+                    raise ValueError("Датчик / источник: выбранное устройство не отправляет события")
+                validators.validate_event_type(payload["eventType"])
+                require_selected(payload["comparisonOperator"], "Оператор", set(rule_operators()))
+                validators.validate_rule_operator(payload["eventType"], payload["comparisonOperator"])
+                validators.validate_event_value(payload["eventType"], payload["compareValue"], "Сравнить с")
+                require_selected(payload["actionKind"], "Тип действия", set(action_kinds()))
                 if payload["actionKind"] == "device_state" and not payload["actionDeviceId"]:
                     raise ValueError("Целевое устройство: нужно выбрать устройство")
+                if payload["actionKind"] == "device_state":
+                    target_device = find_device_by_id(payload["actionDeviceId"])
+                    if target_device is None:
+                        raise ValueError("Целевое устройство: устройство не найдено")
+                    if not device_can_receive_commands(target_device):
+                        raise ValueError("Целевое устройство: датчик или камера не могут быть целью включения/выключения")
                 if payload["actionKind"] == "scene_run" and not payload["actionSceneId"]:
                     raise ValueError("Сценарий: нужно выбрать сценарий")
                 if editing:
@@ -1280,6 +1331,9 @@ def main(page: ft.Page):
             options=[ft.dropdown.Option("on", "Включить"), ft.dropdown.Option("off", "Выключить")],
         )
         action_scene_dd = dropdown(label="Или сценарий", value=str(schedule.get("actionSceneId")) if editing and schedule.get("actionSceneId") is not None else None, options=scene_options())
+        bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название расписания", 3, 80))
+        bind_live_validator(description_tf, lambda value: validators.optional_free_text(value, "Описание расписания", 500))
+        bind_live_validator(time_tf, validators.require_hhmm)
 
         selected_days = set((schedule or {}).get("daysOfWeek", [1, 2, 3, 4, 5]))
         day_boxes: list[tuple[int, ft.Checkbox]] = []
@@ -1300,14 +1354,25 @@ def main(page: ft.Page):
                     "actionTargetIsOn": True if action_state_dd.value == "on" else False,
                     "actionSceneId": int(action_scene_dd.value) if action_scene_dd.value else None,
                 }
-                require_text(payload["name"], "Название расписания", 120)
-                optional_text(payload["description"], "Описание расписания", 1000)
+                ensure_controls_valid(
+                    [
+                        (name_tf, lambda value: validators.require_safe_text(value, "Название расписания", 3, 80)),
+                        (description_tf, lambda value: validators.optional_free_text(value, "Описание расписания", 500)),
+                        (time_tf, validators.require_hhmm),
+                    ]
+                )
                 require_hhmm(payload["timeOfDay"])
                 if not payload["daysOfWeek"]:
                     raise ValueError("Дни недели: выберите хотя бы один день")
-                require_selected(payload["actionKind"], "Тип действия")
+                require_selected(payload["actionKind"], "Тип действия", set(action_kinds()))
                 if payload["actionKind"] == "device_state" and not payload["actionDeviceId"]:
                     raise ValueError("Целевое устройство: нужно выбрать устройство")
+                if payload["actionKind"] == "device_state":
+                    target_device = find_device_by_id(payload["actionDeviceId"])
+                    if target_device is None:
+                        raise ValueError("Целевое устройство: устройство не найдено")
+                    if not device_can_receive_commands(target_device):
+                        raise ValueError("Целевое устройство: датчик или камера не могут быть целью расписания")
                 if payload["actionKind"] == "scene_run" and not payload["actionSceneId"]:
                     raise ValueError("Сценарий: нужно выбрать сценарий")
                 if editing:
@@ -1384,6 +1449,9 @@ def main(page: ft.Page):
         event_type_tf = field(label="Тип события", value="motion")
         value_tf = field(label="Значение", value="true")
         message_tf = field(label="Сообщение", value="Тестовое событие")
+        bind_live_validator(event_type_tf, validators.validate_event_type)
+        bind_live_validator(value_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Значение"))
+        bind_live_validator(message_tf, lambda value: validators.optional_free_text(value, "Сообщение", 1000))
 
         def send_event(_):
             try:
@@ -1395,9 +1463,18 @@ def main(page: ft.Page):
                 }
                 if not payload["deviceId"]:
                     raise ValueError("Источник события: нужно выбрать устройство")
-                require_code_value(payload["eventType"], "Тип события", 120)
-                require_text(payload["value"], "Значение", 500)
-                optional_text(payload["message"], "Сообщение", 1000)
+                source_device = find_device_by_id(payload["deviceId"])
+                if source_device is None:
+                    raise ValueError("Источник события: устройство не найдено")
+                if not device_type_capabilities(source_device.get("type")).get("canEmitEvents", True):
+                    raise ValueError("Источник события: выбранное устройство не отправляет события")
+                ensure_controls_valid(
+                    [
+                        (event_type_tf, validators.validate_event_type),
+                        (value_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Значение")),
+                        (message_tf, lambda value: validators.optional_free_text(value, "Сообщение", 1000)),
+                    ]
+                )
                 result = api_request(
                     "post",
                     "/api/events",
@@ -1455,7 +1532,12 @@ def main(page: ft.Page):
                                 spacing=10,
                                 controls=[
                                     ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, on_click=lambda e: open_device_dialog()),
-                                    ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()),
+                                    ft.OutlinedButton(
+                                        "Отправить событие",
+                                        icon=ft.Icons.SENSORS,
+                                        style=ft.ButtonStyle(color="#ffffff"),
+                                        on_click=lambda e: open_event_dialog(),
+                                    ),
                                 ],
                             ),
                         ],
@@ -1768,7 +1850,7 @@ def main(page: ft.Page):
             controls=[
                 T("Настройки", size=22, weight=ft.FontWeight.BOLD),
                 card(T("Интерфейс", weight=ft.FontWeight.BOLD), dark_sw, ft.ElevatedButton("Сохранить", on_click=save_settings)),
-                card(T("Подключение к API", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}"), TM("backend из backend/CalHouse.Api")),
+                card(T("---", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}")),
             ],
         )
 
