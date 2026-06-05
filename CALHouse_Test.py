@@ -18,6 +18,9 @@ REFRESH_DEBOUNCE_SECONDS = 0.35
 TAB_FADE_MS = 180
 CARD_REVEAL_MS = 170
 VISUAL_API_LOG_LIMIT = 8
+VISUAL_SCENE_LOG_LIMIT = 8
+DEMO_CLOCK_START_MINUTES = 8 * 60
+DEMO_CLOCK_TICK_SECONDS = 2.0
 
 LIGHT_BG = "#E6F0FF"
 DARK_BG = "#0D1B2A"
@@ -264,10 +267,21 @@ async def main(page: ft.Page):
         "visual_api_logs": [],
         "visual_pending_devices": set(),
         "visual_sensor_values": {},
+        "visual_scene_logs": [],
+        "visual_demo_time_minutes": DEMO_CLOCK_START_MINUTES,
+        "visual_demo_time_running": False,
+        "visual_demo_clock_task": None,
+        "visual_day_phase": "day",
+        "visual_clock_controls": {},
+        "visual_scene_controls": {},
     }
     api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
 
     def close_api_client(_=None):
+        clock_task = state.get("visual_demo_clock_task")
+        if isinstance(clock_task, asyncio.Task) and not clock_task.done():
+            clock_task.cancel()
+        state["visual_demo_time_running"] = False
         if not api_client.is_closed:
             asyncio.create_task(api_client.aclose())
 
@@ -2162,6 +2176,209 @@ async def main(page: ft.Page):
             return "warning"
         return "no_connection"
 
+    def demo_time_minutes() -> int:
+        return int(state.get("visual_demo_time_minutes", DEMO_CLOCK_START_MINUTES) or 0) % (24 * 60)
+
+    def format_demo_time(minutes: int | None = None) -> str:
+        value = demo_time_minutes() if minutes is None else int(minutes) % (24 * 60)
+        return f"{value // 60:02d}:{value % 60:02d}"
+
+    def get_day_phase_by_time(minutes: int | None = None) -> str:
+        value = demo_time_minutes() if minutes is None else int(minutes) % (24 * 60)
+        if 6 * 60 <= value < 18 * 60:
+            return "day"
+        if 18 * 60 <= value < 22 * 60:
+            return "evening"
+        return "night"
+
+    def demo_phase_title(phase: str | None = None) -> str:
+        return {"day": "День", "evening": "Вечер", "night": "Ночь"}.get(phase or get_day_phase_by_time(), "День")
+
+    def visual_scene_colors(phase: str | None = None) -> dict[str, str]:
+        current_phase = phase or get_day_phase_by_time()
+        dark = bool(state.get("dark"))
+        if current_phase == "evening":
+            return {
+                "room": "#FFF7ED" if not dark else "#172033",
+                "window": "#FDBA74",
+                "window_alt": "#F97316",
+                "text": "#7C2D12" if not dark else "#FED7AA",
+            }
+        if current_phase == "night":
+            return {
+                "room": "#DBEAFE" if not dark else "#0F172A",
+                "window": "#1E293B",
+                "window_alt": "#0F172A",
+                "text": "#E0F2FE",
+            }
+        return {
+            "room": c("field"),
+            "window": "#BAE6FD",
+            "window_alt": "#E0F2FE",
+            "text": "#0F172A",
+        }
+
+    def add_visual_scene_log(action: str):
+        logs = state.get("visual_scene_logs")
+        if not isinstance(logs, list):
+            logs = []
+            state["visual_scene_logs"] = logs
+        logs.insert(
+            0,
+            {
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "kind": "LOCAL",
+                "action": action,
+                "demoTime": format_demo_time(),
+            },
+        )
+        del logs[VISUAL_SCENE_LOG_LIMIT:]
+
+    def update_visual_time_controls(phase_changed: bool = False):
+        controls = state.get("visual_clock_controls")
+        if isinstance(controls, dict):
+            clock_text = controls.get("clock_text")
+            phase_text = controls.get("phase_text")
+            status_text = controls.get("status_text")
+            clock_card = controls.get("clock_card")
+            if clock_text is not None:
+                clock_text.value = format_demo_time()
+            if phase_text is not None:
+                phase_text.value = demo_phase_title()
+            if status_text is not None:
+                status_text.value = "Время запущено" if state.get("visual_demo_time_running") else "Пауза"
+            if clock_card is not None and getattr(clock_card, "page", None):
+                try:
+                    clock_card.update()
+                except Exception:
+                    pass
+
+        scene_controls = state.get("visual_scene_controls")
+        if phase_changed and isinstance(scene_controls, dict):
+            phase = get_day_phase_by_time()
+            colors = visual_scene_colors(phase)
+            scene_container = scene_controls.get("scene_container")
+            window_container = scene_controls.get("window_container")
+            window_label = scene_controls.get("window_label")
+            window_detail = scene_controls.get("window_detail")
+            phase_icon = scene_controls.get("phase_icon")
+            if scene_container is not None:
+                scene_container.bgcolor = colors["room"]
+            if window_container is not None:
+                window_container.bgcolor = colors["window"]
+            if phase_icon is not None:
+                phase_icon.icon = ft.Icons.WB_SUNNY if phase == "day" else ft.Icons.NIGHTLIGHT
+                phase_icon.color = colors["text"]
+            if window_label is not None:
+                window_label.value = demo_phase_title(phase)
+                window_label.color = colors["text"]
+            if window_detail is not None:
+                window_detail.value = "06:00-17:59" if phase == "day" else "18:00-21:59" if phase == "evening" else "22:00-05:59"
+                window_detail.color = colors["text"]
+            if scene_container is not None and getattr(scene_container, "page", None):
+                try:
+                    scene_container.update()
+                except Exception:
+                    pass
+
+        if phase_changed and int(state.get("tab", 0) or 0) == 6:
+            render_current_view()
+
+    def on_demo_time_changed(action: str | None = None):
+        previous_phase = str(state.get("visual_day_phase") or "day")
+        current_phase = get_day_phase_by_time()
+        state["visual_day_phase"] = current_phase
+        if action:
+            add_visual_scene_log(action)
+        if current_phase != previous_phase:
+            add_visual_scene_log(f"phase changed: {current_phase}")
+        # Этап 4: здесь будет проверка time-based visual rules и запуск visual scenarios.
+        update_visual_time_controls(phase_changed=current_phase != previous_phase)
+
+    def set_demo_time(minutes: int, action: str | None = None):
+        state["visual_demo_time_minutes"] = int(minutes) % (24 * 60)
+        on_demo_time_changed(action)
+
+    def advance_demo_time(minutes: int, action: str | None = None):
+        set_demo_time(demo_time_minutes() + minutes, action)
+
+    async def demo_clock_runner():
+        try:
+            while state.get("visual_demo_time_running"):
+                await asyncio.sleep(DEMO_CLOCK_TICK_SECONDS)
+                if not state.get("visual_demo_time_running"):
+                    break
+                advance_demo_time(1)
+        finally:
+            if state.get("visual_demo_clock_task") is asyncio.current_task():
+                state["visual_demo_clock_task"] = None
+
+    def ensure_demo_clock_task():
+        task = state.get("visual_demo_clock_task")
+        if isinstance(task, asyncio.Task) and not task.done():
+            return
+        state["visual_demo_clock_task"] = asyncio.create_task(demo_clock_runner())
+
+    def start_demo_clock():
+        if state.get("visual_demo_time_running"):
+            update_visual_time_controls()
+            return
+        state["visual_demo_time_running"] = True
+        add_visual_scene_log("demo-time started")
+        ensure_demo_clock_task()
+        update_visual_time_controls()
+        render_current_view()
+
+    def pause_demo_clock(add_log: bool = True):
+        if not state.get("visual_demo_time_running"):
+            update_visual_time_controls()
+            return
+        state["visual_demo_time_running"] = False
+        task = state.get("visual_demo_clock_task")
+        if isinstance(task, asyncio.Task) and not task.done():
+            task.cancel()
+        state["visual_demo_clock_task"] = None
+        if add_log:
+            add_visual_scene_log("demo-time paused")
+        update_visual_time_controls()
+        if int(state.get("tab", 0) or 0) == 6:
+            render_current_view()
+
+    def reset_demo_clock():
+        state["visual_demo_time_running"] = False
+        task = state.get("visual_demo_clock_task")
+        if isinstance(task, asyncio.Task) and not task.done():
+            task.cancel()
+        state["visual_demo_clock_task"] = None
+        set_demo_time(DEMO_CLOCK_START_MINUTES, "demo-time reset")
+        render_current_view()
+
+    def build_visual_scene_events() -> list[ft.Control]:
+        logs = state.get("visual_scene_logs")
+        entries = logs if isinstance(logs, list) else []
+        controls: list[ft.Control] = [T("События сцены", weight=ft.FontWeight.BOLD), TM("Локальные действия, не backend endpointы", size=12)]
+        if not entries:
+            controls.append(TM("Локальных событий пока нет", size=12))
+            return controls
+        for entry in entries:
+            controls.append(
+                ft.Container(
+                    padding=10,
+                    border_radius=12,
+                    bgcolor=c("field"),
+                    border=ft.border.all(1, c("border")),
+                    content=ft.Column(
+                        spacing=4,
+                        controls=[
+                            T(f"{entry.get('kind')} demo-time", size=12, weight=ft.FontWeight.BOLD),
+                            TM(f"{entry.get('time')} · action: {entry.get('action')}", size=11),
+                            TM(f"demoTime: {entry.get('demoTime')}", size=11),
+                        ],
+                    ),
+                )
+            )
+        return controls
+
     def build_visual_api_monitor() -> ft.Control:
         logs = state.get("visual_api_logs")
         entries = logs if isinstance(logs, list) else []
@@ -2211,6 +2428,8 @@ async def main(page: ft.Page):
                     ),
                     TM("Только запросы из визуализации", size=12),
                     *(entry_controls or [TM("Запросов из визуализации пока нет", size=12)]),
+                    ft.Divider(height=1, color=c("border")),
+                    *build_visual_scene_events(),
                 ],
             ),
         )
@@ -2346,7 +2565,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=146,
+            height=176,
             padding=12,
             border_radius=16,
             bgcolor=bg,
@@ -2382,7 +2601,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=162,
+            height=206,
             padding=12,
             border_radius=16,
             bgcolor=bg,
@@ -2419,7 +2638,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=162,
+            height=196,
             padding=12,
             border_radius=16,
             bgcolor=c("card"),
@@ -2461,7 +2680,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=172,
+            height=226,
             padding=12,
             border_radius=16,
             bgcolor=bg,
@@ -2494,34 +2713,132 @@ async def main(page: ft.Page):
             return render_demo_leak_sensor(device, config, is_pending)
         return render_demo_toggle_device(device, config, is_pending)
 
+    def build_demo_clock_controls() -> ft.Control:
+        clock_text = T(format_demo_time(), size=22, weight=ft.FontWeight.BOLD)
+        phase_text = TM(demo_phase_title(), size=12)
+        status_text = TM("Время запущено" if state.get("visual_demo_time_running") else "Пауза", size=12)
+        clock_card = ft.Container(
+            padding=12,
+            border_radius=16,
+            bgcolor=c("card"),
+            border=ft.border.all(1, c("border")),
+            content=ft.Row(
+                spacing=12,
+                vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(ft.Icons.SCHEDULE, color=c("accent")),
+                    ft.Column(spacing=2, controls=[clock_text, phase_text, status_text]),
+                    ft.Row(
+                        spacing=6,
+                        controls=[
+                            ft.OutlinedButton("Старт", icon=ft.Icons.PLAY_ARROW, on_click=lambda e: start_demo_clock()),
+                            ft.OutlinedButton("Пауза", icon=ft.Icons.PAUSE, on_click=lambda e: pause_demo_clock()),
+                            ft.TextButton("+1 час", on_click=lambda e: (advance_demo_time(60, "demo-time advanced +1 hour"), render_current_view())),
+                            ft.TextButton("+6 часов", on_click=lambda e: (advance_demo_time(360, "demo-time advanced +6 hours"), render_current_view())),
+                            ft.TextButton("Сброс", icon=ft.Icons.RESTART_ALT, on_click=lambda e: reset_demo_clock()),
+                        ],
+                    ),
+                ],
+            ),
+        )
+        state["visual_clock_controls"] = {
+            "clock_card": clock_card,
+            "clock_text": clock_text,
+            "phase_text": phase_text,
+            "status_text": status_text,
+        }
+        return clock_card
+
+    def build_day_night_window() -> ft.Control:
+        phase = get_day_phase_by_time()
+        colors = visual_scene_colors(phase)
+        window_label = ft.Text(demo_phase_title(phase), color=colors["text"], weight=ft.FontWeight.BOLD, size=13)
+        window_detail = ft.Text(
+            "06:00-17:59" if phase == "day" else "18:00-21:59" if phase == "evening" else "22:00-05:59",
+            color=colors["text"],
+            size=11,
+        )
+        phase_icon = ft.Icon(ft.Icons.WB_SUNNY if phase == "day" else ft.Icons.NIGHTLIGHT, color=colors["text"], size=20)
+        window_container = ft.Container(
+            width=168,
+            height=112,
+            padding=10,
+            border_radius=14,
+            bgcolor=colors["window"],
+            border=ft.border.all(2, c("border")),
+            animate=ft.Animation(220, ft.AnimationCurve.EASE_OUT),
+            content=ft.Column(
+                alignment=ft.MainAxisAlignment.CENTER,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                spacing=5,
+                controls=[
+                    phase_icon,
+                    window_label,
+                    window_detail,
+                ],
+            ),
+        )
+        scene_controls = state.get("visual_scene_controls")
+        if not isinstance(scene_controls, dict):
+            scene_controls = {}
+            state["visual_scene_controls"] = scene_controls
+        scene_controls.update(
+            {
+                "window_container": window_container,
+                "window_label": window_label,
+                "window_detail": window_detail,
+                "phase_icon": phase_icon,
+            }
+        )
+        return window_container
+
     def build_visual_room_scene(room_id: str | None, devices: list[dict[str, Any]]) -> ft.Control:
-        positioned = []
+        positioned: list[ft.Control] = [
+            ft.Container(
+                left=24,
+                top=20,
+                content=build_day_night_window(),
+            )
+        ]
         for index, device in enumerate(devices):
             col = index % 3
             row = index // 3
             positioned.append(
                 ft.Container(
                     left=28 + col * 220,
-                    top=34 + row * 184,
+                    top=164 + row * 238,
                     content=build_visual_demo_device(device, index),
                 )
             )
-        scene_height = max(430, 190 + ((len(devices) + 2) // 3) * 184)
+        scene_height = max(560, 300 + ((len(devices) + 2) // 3) * 238)
         scene_content = (
             ft.Stack(controls=positioned, height=scene_height)
-            if positioned
+            if devices
             else ft.Container(
                 height=scene_height,
-                alignment=ft.Alignment(0, 0),
-                content=TM("В этой комнате пока нет демо-устройств."),
+                content=ft.Stack(
+                    height=scene_height,
+                    controls=[
+                        *positioned,
+                        ft.Container(
+                            left=220,
+                            top=210,
+                            width=360,
+                            alignment=ft.Alignment(0, 0),
+                            content=TM("В этой комнате пока нет демо-устройств."),
+                        ),
+                    ],
+                ),
             )
         )
-        return ft.Container(
+        phase = get_day_phase_by_time()
+        scene_container = ft.Container(
             expand=True,
             padding=16,
             border_radius=18,
-            bgcolor=c("field"),
+            bgcolor=visual_scene_colors(phase)["room"],
             border=ft.border.all(1, c("border")),
+            animate=ft.Animation(220, ft.AnimationCurve.EASE_OUT),
             content=ft.Column(
                 spacing=10,
                 controls=[
@@ -2529,13 +2846,19 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             T("Комната", weight=ft.FontWeight.BOLD),
-                            TM(f"Демо-устройств: {len(devices)}", size=12),
+                            TM(f"Демо-устройств: {len(devices)} · {demo_phase_title(phase)}", size=12),
                         ],
                     ),
                     scene_content,
                 ],
             ),
         )
+        scene_controls = state.get("visual_scene_controls")
+        if not isinstance(scene_controls, dict):
+            scene_controls = {}
+            state["visual_scene_controls"] = scene_controls
+        scene_controls["scene_container"] = scene_container
+        return scene_container
 
     def open_visual_demo_device_dialog():
         if not data["rooms"]:
@@ -2632,6 +2955,7 @@ async def main(page: ft.Page):
         room_dd.on_change = on_room_change
         demo_devices = visual_room_demo_devices(selected_room)
         loading = loading_banner("rooms", "devices")
+        state["visual_day_phase"] = get_day_phase_by_time()
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
@@ -2643,6 +2967,7 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=[room_dd, ft.ElevatedButton("Добавить демо-устройство", icon=ft.Icons.ADD_HOME, visible=is_admin(), on_click=lambda e: open_visual_demo_device_dialog())]),
                     ],
                 ),
+                build_demo_clock_controls(),
                 *([loading] if loading else []),
                 ft.Row(
                     spacing=14,
@@ -3065,6 +3390,15 @@ async def main(page: ft.Page):
             state["visual_pending_devices"].clear()
         if isinstance(state.get("visual_sensor_values"), dict):
             state["visual_sensor_values"].clear()
+        if isinstance(state.get("visual_scene_logs"), list):
+            state["visual_scene_logs"].clear()
+        clock_task = state.get("visual_demo_clock_task")
+        if isinstance(clock_task, asyncio.Task) and not clock_task.done():
+            clock_task.cancel()
+        state["visual_demo_clock_task"] = None
+        state["visual_demo_time_running"] = False
+        state["visual_demo_time_minutes"] = DEMO_CLOCK_START_MINUTES
+        state["visual_day_phase"] = "day"
         state["visual_room_id"] = None
         clear_data()
         build()
@@ -3485,7 +3819,10 @@ async def main(page: ft.Page):
     )
 
     async def on_nav_change(e: ft.ControlEvent):
+        previous_tab = int(state.get("tab", 0) or 0)
         state["tab"] = int(e.control.selected_index)
+        if previous_tab == 6 and state["tab"] != 6:
+            pause_demo_clock(add_log=False)
         await render_current_view_animated(update_nav=True)
 
     nav.on_change = async_click(on_nav_change)
