@@ -14,6 +14,7 @@ INITIAL_LIST_LIMIT = 25
 LIST_PAGE_SIZE = 25
 REFRESH_DEBOUNCE_SECONDS = 0.35
 TAB_FADE_MS = 180
+CARD_REVEAL_MS = 170
 
 LIGHT_BG = "#E6F0FF"
 DARK_BG = "#0D1B2A"
@@ -202,6 +203,7 @@ async def main(page: ft.Page):
         "refreshing_keys": set(),
         "last_refresh_started": {},
         "visible_limits": {"devices": INITIAL_LIST_LIMIT, "rules": INITIAL_LIST_LIMIT, "logs": INITIAL_LIST_LIMIT},
+        "pending_card_reveals": [],
     }
     api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
 
@@ -287,8 +289,23 @@ async def main(page: ft.Page):
         remaining = total - current
         return ft.OutlinedButton(f"Показать ещё ({remaining})", icon=ft.Icons.EXPAND_MORE, on_click=show_more)
 
+    def clear_pending_card_reveals():
+        pending = state.get("pending_card_reveals")
+        if isinstance(pending, list):
+            pending.clear()
+
+    def prepare_card_reveal(item: ft.Container):
+        item.opacity = 0
+        item.offset = ft.Offset(0, 0.015)
+        item.animate_opacity = ft.Animation(CARD_REVEAL_MS, ft.AnimationCurve.EASE_OUT)
+        item.animate_offset = ft.Animation(CARD_REVEAL_MS, ft.AnimationCurve.EASE_OUT)
+        pending = state.get("pending_card_reveals")
+        if isinstance(pending, list):
+            pending.append(item)
+        return item
+
     def card(*controls: ft.Control, padding: int = 16, expand: bool = False):
-        return ft.Container(
+        item = ft.Container(
             expand=expand,
             padding=padding,
             bgcolor=c("card"),
@@ -297,6 +314,32 @@ async def main(page: ft.Page):
             animate=ft.Animation(140, ft.AnimationCurve.EASE_OUT),
             content=ft.Column(spacing=10, controls=list(controls)),
         )
+        return prepare_card_reveal(item)
+
+    async def reveal_cards():
+        pending = state.get("pending_card_reveals")
+        if not isinstance(pending, list) or not pending:
+            return
+        cards = [item for item in pending if getattr(item, "page", None)]
+        pending.clear()
+        if not cards:
+            return
+        await asyncio.sleep(0.01)
+        for item in cards:
+            item.opacity = 1
+            item.offset = ft.Offset(0, 0)
+            try:
+                item.update()
+            except Exception:
+                pass
+
+    def schedule_card_reveal():
+        pending = state.get("pending_card_reveals")
+        if isinstance(pending, list) and pending:
+            try:
+                asyncio.create_task(reveal_cards())
+            except RuntimeError:
+                pending.clear()
 
     def field(**kwargs):
         return ft.TextField(
@@ -881,7 +924,7 @@ async def main(page: ft.Page):
         return ", ".join(lookup.get(day, str(day)) for day in days) or "—"
 
     def stat_card(title: str, value: str, icon: str, tab_index: int | None = None):
-        return ft.Container(
+        item = ft.Container(
             expand=True,
             padding=16,
             bgcolor=c("card"),
@@ -896,6 +939,7 @@ async def main(page: ft.Page):
             ),
             on_click=async_click(lambda e: switch_tab(tab_index)) if tab_index is not None else None,
         )
+        return prepare_card_reveal(item)
 
     async def switch_tab(index: int):
         state["tab"] = index
@@ -2783,9 +2827,11 @@ async def main(page: ft.Page):
         if update_nav:
             nav.selected_index = state["tab"]
         content.opacity = 1
+        clear_pending_card_reveals()
         content.content = current_view()
         if getattr(content, "page", None):
             content.update()
+            schedule_card_reveal()
             if update_nav:
                 try:
                     nav.update()
@@ -2800,10 +2846,12 @@ async def main(page: ft.Page):
             return
         if update_nav:
             nav.selected_index = state["tab"]
+        clear_pending_card_reveals()
         content.content = current_view()
         content.opacity = 0
         if getattr(content, "page", None):
             content.update()
+            schedule_card_reveal()
             if update_nav:
                 try:
                     nav.update()
@@ -2822,6 +2870,7 @@ async def main(page: ft.Page):
             page.navigation_bar = None
             page.appbar = None
             content.opacity = 1
+            clear_pending_card_reveals()
             content.content = auth_view()
             page.controls.clear()
             page.add(content)
@@ -2842,10 +2891,12 @@ async def main(page: ft.Page):
             ],
         )
         content.opacity = 1
+        clear_pending_card_reveals()
         content.content = current_view()
         page.controls.clear()
         page.add(content)
         page.update()
+        schedule_card_reveal()
 
     build()
 
