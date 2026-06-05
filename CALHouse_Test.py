@@ -41,6 +41,7 @@ LIGHT_PALETTE = {
     "accent_hover": ACCENT_HOVER,
     "gradient_start": GRADIENT_LIGHT,
     "gradient_end": GRADIENT_LIGHT_END,
+    "hero_bg": GRADIENT_LIGHT_END,
     "hero_text": LIGHT_TEXT,
     "hero_muted": LIGHT_MUTED_TEXT,
     "warning_text": "#92400E",
@@ -61,6 +62,7 @@ DARK_PALETTE = {
     "accent_hover": ACCENT_HOVER,
     "gradient_start": GRADIENT_DARK,
     "gradient_end": DARK_BG,
+    "hero_bg": GRADIENT_DARK,
     "hero_text": DARK_TEXT,
     "hero_muted": DARK_MUTED_TEXT,
     "warning_text": "#FBBF24",
@@ -260,12 +262,14 @@ async def main(page: ft.Page):
             async with httpx.AsyncClient(timeout=timeout) as client:
                 response = await client.request(method=method.upper(), url=url, json=payload, headers=headers)
             if response.status_code >= 400:
-                print(f"[api:error] status_code={response.status_code}", flush=True)
-                print(f"[api:error] response.text={response.text}", flush=True)
                 try:
                     error_data = response.json()
                 except Exception:
                     error_data = {}
+                error_code = str(error_data.get("code") or "").strip()
+                if not (path == "/api/auth/login" and error_code == "AUTH_INVALID_CREDENTIALS"):
+                    print(f"[api:error] status_code={response.status_code}", flush=True)
+                    print(f"[api:error] response.text={response.text}", flush=True)
                 message = error_data.get("message") or error_data.get("error") or f"HTTP {response.status_code}"
                 message = api_error_message(path, response.status_code, error_data, message)
                 error_details = error_data.get("errors") or error_data.get("validationErrors") or error_data.get("details")
@@ -319,15 +323,26 @@ async def main(page: ft.Page):
     def validate_connection_values(connection: dict[str, str], schema_fields: dict[str, dict[str, Any]] | None = None):
         validators.validate_connection_values(connection, schema_fields)
 
+    def set_control_error(control: ft.Control, message: str | None):
+        if hasattr(control, "error"):
+            control.error = message
+        elif hasattr(control, "error_text"):
+            control.error_text = message
+
+    def get_control_error(control: ft.Control) -> str | None:
+        value = getattr(control, "error", None)
+        if value:
+            return str(value)
+        value = getattr(control, "error_text", None)
+        return str(value) if value else None
+
     def validate_control(control: ft.Control, validator) -> bool:
         try:
             validator(getattr(control, "value", None))
-            if hasattr(control, "error_text"):
-                control.error_text = None
+            set_control_error(control, None)
             ok = True
         except Exception as ex:
-            if hasattr(control, "error_text"):
-                control.error_text = error_message(ex)
+            set_control_error(control, error_message(ex))
             ok = False
         try:
             if getattr(control, "page", None):
@@ -358,7 +373,7 @@ async def main(page: ft.Page):
         first_error = None
         for control, validator in items:
             if not validate_control(control, validator) and first_error is None:
-                first_error = getattr(control, "error_text", None)
+                first_error = get_control_error(control)
         if first_error:
             raise ValueError(first_error)
 
@@ -994,7 +1009,7 @@ async def main(page: ft.Page):
                     validators.validate_connection_values({field_name: clean_value} if clean_value else {}, {field_name: field})
 
                 if not validate_control(control, check) and first_error is None:
-                    first_error = control.error_text
+                    first_error = get_control_error(control)
             if first_error:
                 raise ValueError(first_error)
 
@@ -1701,11 +1716,7 @@ async def main(page: ft.Page):
                 ft.Container(
                     padding=18,
                     border_radius=18,
-                    gradient=ft.LinearGradient(
-                        begin=ft.Alignment(-1, -1),
-                        end=ft.Alignment(1, 1),
-                        colors=[c("gradient_start"), c("gradient_end")],
-                    ),
+                    bgcolor=c("hero_bg"),
                     content=ft.Column(
                         spacing=8,
                         controls=[
@@ -2041,66 +2052,151 @@ async def main(page: ft.Page):
         show_message("Выход выполнен")
 
     def auth_view() -> ft.Control:
-        login_tf = field(label="Логин", hint_text="admin")
-        password_tf = field(label="Пароль", password=True, can_reveal_password=True)
-        confirm_tf = field(label="Повтор пароля", password=True, can_reveal_password=True)
+        auth_card_width = 620
+        auth_content_width = auth_card_width - 48
+        login_tf = field(label="Логин", hint_text="admin", width=auth_content_width, error_max_lines=3)
+        password_tf = field(label="Пароль", password=True, can_reveal_password=True, width=auth_content_width, error_max_lines=3)
+        confirm_tf = field(label="Повтор пароля", password=True, can_reveal_password=True, width=auth_content_width, error_max_lines=3)
+        auth_error_text = ft.Text(
+            "",
+            color="#DC2626",
+            size=12,
+            visible=False,
+            width=auth_content_width,
+            no_wrap=False,
+            overflow=ft.TextOverflow.VISIBLE,
+        )
+
+        def update_auth_error_controls():
+            for control in (password_tf, confirm_tf, auth_error_text):
+                try:
+                    if getattr(control, "page", None):
+                        control.update()
+                except Exception:
+                    pass
+
+        def set_auth_error(message: str, control: ft.Control | None = None):
+            if control is not None:
+                set_control_error(control, message)
+            auth_error_text.value = message
+            auth_error_text.visible = True
+            update_auth_error_controls()
+
+        def clear_auth_error():
+            if not auth_error_text.visible and get_control_error(password_tf) != "Неправильно введен логин или пароль":
+                return
+            if get_control_error(password_tf) == "Неправильно введен логин или пароль":
+                set_control_error(password_tf, None)
+            auth_error_text.value = ""
+            auth_error_text.visible = False
+            update_auth_error_controls()
+
+        def clear_password_errors():
+            changed = bool(auth_error_text.visible or get_control_error(password_tf) or get_control_error(confirm_tf))
+            set_control_error(password_tf, None)
+            set_control_error(confirm_tf, None)
+            auth_error_text.value = ""
+            auth_error_text.visible = False
+            if changed:
+                update_auth_error_controls()
 
         def validate_auth_login(value: Any) -> str:
             result = validators.clean(value)
+            if not result:
+                raise ValueError("Логин обязателен")
             if len(result) < 3 or len(result) > 50:
-                raise ValueError("Логин: длина 3-50 символов")
-            return validators.require_code(result, "Логин", 50)
+                raise ValueError("Логин должен быть от 3 до 50 символов")
+            if not validators.CODE_RE.fullmatch(result):
+                raise ValueError("Логин должен содержать только латиницу, цифры, точку, дефис и подчёркивание")
+            return result
 
         def validate_auth_password(value: Any, label: str = "Пароль") -> str:
             result = str(value or "")
             if len(result) < 6 or len(result) > 100:
-                raise ValueError(f"{label}: длина 6-100 символов")
+                raise ValueError(f"{label} должен быть от 6 до 100 символов")
             return result
 
         def validate_confirm_password(value: Any) -> str:
             result = validate_auth_password(value, "Повтор пароля")
             if result != (password_tf.value or ""):
-                raise ValueError("Повтор пароля: пароли не совпадают")
+                raise ValueError("Пароли должны совпадать")
             return result
 
-        bind_live_validator(login_tf, validate_auth_login)
+        def validate_auth_control(control: ft.Control, validator) -> str | None:
+            try:
+                validator(getattr(control, "value", None))
+                set_control_error(control, None)
+                error = None
+            except Exception as ex:
+                error = str(ex)
+                set_control_error(control, error)
+            try:
+                if getattr(control, "page", None):
+                    control.update()
+            except Exception:
+                pass
+            return error
+
+        def ensure_auth_controls_valid(items: list[tuple[ft.Control, Any]]) -> bool:
+            first_error = None
+            for control, validator in items:
+                error = validate_auth_control(control, validator)
+                if error and first_error is None:
+                    first_error = error
+            if first_error:
+                set_auth_error(first_error)
+                return False
+            auth_error_text.value = ""
+            auth_error_text.visible = False
+            update_auth_error_controls()
+            return True
+
+        def on_login_change(e):
+            clear_auth_error()
+            validate_auth_control(e.control, validate_auth_login)
+
+        login_tf.on_change = on_login_change
 
         def on_password_change(e):
-            validate_control(e.control, validate_auth_password)
-            if confirm_tf.value:
-                validate_control(confirm_tf, validate_confirm_password)
+            clear_password_errors()
 
         password_tf.on_change = on_password_change
-        bind_live_validator(confirm_tf, validate_confirm_password)
+
+        def on_confirm_change(e):
+            clear_password_errors()
+
+        confirm_tf.on_change = on_confirm_change
 
         async def submit_login():
-            ensure_controls_valid(
-                [
-                    (login_tf, validate_auth_login),
-                    (password_tf, validate_auth_password),
-                ]
-            )
-            try:
-                result = await api_request("post", "/api/auth/login", {"login": (login_tf.value or "").strip(), "password": password_tf.value or ""})
-            except RuntimeError as ex:
-                if "логин или пароль" in str(ex).lower():
-                    password_tf.error_text = "Неправильно введен логин или пароль"
-                    try:
-                        password_tf.update()
-                    except Exception:
-                        page.update()
-                raise
-            await apply_auth_result(result or {})
-            show_message("Вход выполнен")
-
-        async def submit_register():
-            ensure_controls_valid(
+            clear_auth_error()
+            if not ensure_auth_controls_valid(
                 [
                     (login_tf, validate_auth_login),
                     (password_tf, validate_auth_password),
                     (confirm_tf, validate_confirm_password),
                 ]
-            )
+            ):
+                return
+            try:
+                result = await api_request("post", "/api/auth/login", {"login": (login_tf.value or "").strip(), "password": password_tf.value or ""})
+            except RuntimeError as ex:
+                if "логин или пароль" in str(ex).lower():
+                    set_auth_error("Неправильно введен логин или пароль", password_tf)
+                    return
+                raise
+            await apply_auth_result(result or {})
+            show_message("Вход выполнен")
+
+        async def submit_register():
+            clear_auth_error()
+            if not ensure_auth_controls_valid(
+                [
+                    (login_tf, validate_auth_login),
+                    (password_tf, validate_auth_password),
+                    (confirm_tf, validate_confirm_password),
+                ]
+            ):
+                return
             result = await api_request(
                 "post",
                 "/api/auth/register",
@@ -2113,7 +2209,7 @@ async def main(page: ft.Page):
             expand=True,
             alignment=ft.Alignment(0, 0),
             content=ft.Container(
-                width=430,
+                width=auth_card_width,
                 padding=24,
                 bgcolor=c("card"),
                 border=ft.border.all(1, c("border")),
@@ -2127,11 +2223,13 @@ async def main(page: ft.Page):
                         login_tf,
                         password_tf,
                         confirm_tf,
+                        auth_error_text,
                         ft.Row(
+                            width=auth_content_width,
                             spacing=10,
                             controls=[
-                                ft.ElevatedButton("Войти", icon=ft.Icons.LOGIN, on_click=async_click(lambda e: run_button_action(e, submit_login))),
-                                ft.OutlinedButton("Зарегистрироваться", icon=ft.Icons.PERSON_ADD, on_click=async_click(lambda e: run_button_action(e, submit_register))),
+                                ft.ElevatedButton("Войти", icon=ft.Icons.LOGIN, expand=True, on_click=async_click(lambda e: run_button_action(e, submit_login))),
+                                ft.OutlinedButton("Зарегистрироваться", icon=ft.Icons.PERSON_ADD, expand=True, on_click=async_click(lambda e: run_button_action(e, submit_register))),
                             ],
                         ),
                     ],
@@ -2149,14 +2247,20 @@ async def main(page: ft.Page):
         await api_request("put", f"/api/users/{user_id}/active", {"isActive": is_active})
         await refresh_sections("users", "logs")
         build()
-        show_message("Статус пользователя обновлен")
+        show_message("Пользователь активирован" if is_active else "Пользователь заблокирован")
+
+    def validate_admin_password(value: Any) -> str:
+        result = str(value or "")
+        if len(result) < 6 or len(result) > 100:
+            raise ValueError("Новый пароль должен быть от 6 до 100 символов")
+        return result
 
     async def reset_user_password(user_id: int, password_value: str):
-        clean_password = password_value or ""
+        clean_password = validate_admin_password(password_value)
         await api_request("put", f"/api/users/{user_id}/password", {"password": clean_password, "confirmPassword": clean_password})
         await refresh_sections("users", "logs")
         build()
-        show_message("Пароль пользователя сброшен")
+        show_message("Пароль сброшен")
 
     def users_admin_panel() -> ft.Control:
         if not is_admin():
