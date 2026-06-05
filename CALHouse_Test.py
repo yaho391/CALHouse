@@ -13,6 +13,7 @@ HISTORY_LOG_LIMIT = 30
 INITIAL_LIST_LIMIT = 25
 LIST_PAGE_SIZE = 25
 REFRESH_DEBOUNCE_SECONDS = 0.35
+TAB_FADE_MS = 180
 
 LIGHT_BG = "#E6F0FF"
 DARK_BG = "#0D1B2A"
@@ -221,7 +222,13 @@ async def main(page: ft.Page):
         "users": [],
     }
 
-    content = ft.Container(expand=True, padding=20, animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT))
+    content = ft.Container(
+        expand=True,
+        padding=20,
+        opacity=1,
+        animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
+        animate_opacity=ft.Animation(TAB_FADE_MS, ft.AnimationCurve.EASE_OUT),
+    )
 
     def palette() -> dict[str, str]:
         return DARK_PALETTE if state["dark"] else LIGHT_PALETTE
@@ -887,12 +894,12 @@ async def main(page: ft.Page):
                     ft.Icon(icon, size=30, color=c("accent")),
                 ],
             ),
-            on_click=(lambda e: switch_tab(tab_index)) if tab_index is not None else None,
+            on_click=async_click(lambda e: switch_tab(tab_index)) if tab_index is not None else None,
         )
 
-    def switch_tab(index: int):
+    async def switch_tab(index: int):
         state["tab"] = index
-        render_current_view(update_nav=True)
+        await render_current_view_animated(update_nav=True)
 
     def confirm_action(title: str, message: str, action):
         dialog_ref = None
@@ -2750,11 +2757,11 @@ async def main(page: ft.Page):
         ],
     )
 
-    def on_nav_change(e: ft.ControlEvent):
+    async def on_nav_change(e: ft.ControlEvent):
         state["tab"] = int(e.control.selected_index)
-        render_current_view(update_nav=True)
+        await render_current_view_animated(update_nav=True)
 
-    nav.on_change = on_nav_change
+    nav.on_change = async_click(on_nav_change)
 
     def current_view() -> ft.Control:
         views = {
@@ -2775,6 +2782,7 @@ async def main(page: ft.Page):
             return
         if update_nav:
             nav.selected_index = state["tab"]
+        content.opacity = 1
         content.content = current_view()
         if getattr(content, "page", None):
             content.update()
@@ -2786,11 +2794,34 @@ async def main(page: ft.Page):
         else:
             page.update()
 
+    async def render_current_view_animated(update_nav: bool = False):
+        if not is_authenticated():
+            build()
+            return
+        if update_nav:
+            nav.selected_index = state["tab"]
+        content.content = current_view()
+        content.opacity = 0
+        if getattr(content, "page", None):
+            content.update()
+            if update_nav:
+                try:
+                    nav.update()
+                except Exception:
+                    pass
+            await asyncio.sleep(0.01)
+            content.opacity = 1
+            content.update()
+        else:
+            content.opacity = 1
+            page.update()
+
     def build():
         page.bgcolor = c("bg")
         if not is_authenticated():
             page.navigation_bar = None
             page.appbar = None
+            content.opacity = 1
             content.content = auth_view()
             page.controls.clear()
             page.add(content)
@@ -2810,6 +2841,7 @@ async def main(page: ft.Page):
                 ft.TextButton("Выйти", on_click=lambda e: logout()),
             ],
         )
+        content.opacity = 1
         content.content = current_view()
         page.controls.clear()
         page.add(content)
