@@ -10,6 +10,9 @@ API_BASE = "http://localhost:5000"
 API_TIMEOUT_SECONDS = 3.0
 DEBUG_DEVICE_FORM = False
 HISTORY_LOG_LIMIT = 30
+INITIAL_LIST_LIMIT = 25
+LIST_PAGE_SIZE = 25
+REFRESH_DEBOUNCE_SECONDS = 0.35
 
 LIGHT_BG = "#E6F0FF"
 DARK_BG = "#0D1B2A"
@@ -76,6 +79,7 @@ STATUS_COLORS = {
     "completed": ("#DCFCE7", "#166534"),
     "enabled": ("#DBEAFE", "#1D4ED8"),
     "no_connection": ("#FEE2E2", "#991B1B"),
+    "pending": ("#FEF3C7", "#92400E"),
     "warning": ("#FEF3C7", "#92400E"),
     "disabled": ("#E2E8F0", "#475569"),
     "unknown": ("#E2E8F0", "#475569"),
@@ -186,7 +190,18 @@ async def main(page: ft.Page):
     page.spacing = 0
     page.theme_mode = ft.ThemeMode.LIGHT
 
-    state = {"tab": 0, "dark": False, "token": None, "login": "", "role": "", "auth_refresh_task": None}
+    state = {
+        "tab": 0,
+        "dark": False,
+        "token": None,
+        "login": "",
+        "role": "",
+        "auth_refresh_task": None,
+        "loading_sections": set(),
+        "refreshing_keys": set(),
+        "last_refresh_started": {},
+        "visible_limits": {"devices": INITIAL_LIST_LIMIT, "rules": INITIAL_LIST_LIMIT, "logs": INITIAL_LIST_LIMIT},
+    }
     api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
 
     def close_api_client(_=None):
@@ -206,7 +221,7 @@ async def main(page: ft.Page):
         "users": [],
     }
 
-    content = ft.Container(expand=True, padding=20)
+    content = ft.Container(expand=True, padding=20, animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT))
 
     def palette() -> dict[str, str]:
         return DARK_PALETTE if state["dark"] else LIGHT_PALETTE
@@ -220,6 +235,51 @@ async def main(page: ft.Page):
     def TM(text: str, **kwargs):
         return ft.Text(text, color=kwargs.pop("color", c("muted")), **kwargs)
 
+    def is_section_loading(*sections: str) -> bool:
+        loading = state.get("loading_sections")
+        return bool(isinstance(loading, set) and loading.intersection(sections))
+
+    def loading_banner(*sections: str):
+        if not is_section_loading(*sections):
+            return None
+        return ft.Container(
+            padding=10,
+            bgcolor=c("field"),
+            border_radius=12,
+            border=ft.border.all(1, c("border")),
+            animate=ft.Animation(140, ft.AnimationCurve.EASE_OUT),
+            content=ft.Row(
+                spacing=10,
+                controls=[
+                    ft.ProgressRing(width=16, height=16, stroke_width=2, color=c("accent")),
+                    TM("Обновление данных...", size=12),
+                ],
+            ),
+        )
+
+    def visible_items(section: str, items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        limits = state.get("visible_limits")
+        limit = INITIAL_LIST_LIMIT
+        if isinstance(limits, dict):
+            limit = int(limits.get(section, INITIAL_LIST_LIMIT) or INITIAL_LIST_LIMIT)
+        return items[:limit]
+
+    def show_more_button(section: str, total: int):
+        limits = state.get("visible_limits")
+        current = INITIAL_LIST_LIMIT
+        if isinstance(limits, dict):
+            current = int(limits.get(section, INITIAL_LIST_LIMIT) or INITIAL_LIST_LIMIT)
+        if total <= current:
+            return None
+
+        def show_more(_):
+            if isinstance(state.get("visible_limits"), dict):
+                state["visible_limits"][section] = current + LIST_PAGE_SIZE
+            render_current_view()
+
+        remaining = total - current
+        return ft.OutlinedButton(f"Показать ещё ({remaining})", icon=ft.Icons.EXPAND_MORE, on_click=show_more)
+
     def card(*controls: ft.Control, padding: int = 16, expand: bool = False):
         return ft.Container(
             expand=expand,
@@ -227,6 +287,7 @@ async def main(page: ft.Page):
             bgcolor=c("card"),
             border_radius=16,
             border=ft.border.all(1, c("border")),
+            animate=ft.Animation(140, ft.AnimationCurve.EASE_OUT),
             content=ft.Column(spacing=10, controls=list(controls)),
         )
 
@@ -558,7 +619,34 @@ async def main(page: ft.Page):
 
     async def refresh_and_build(*sections: str, show_toast: bool = False):
         target_sections = sections or current_tab_sections()
-        await refresh_sections(*target_sections, show_toast=show_toast)
+        key = tuple(sorted(target_sections))
+        loop_time = asyncio.get_running_loop().time()
+        refreshing_keys = state.get("refreshing_keys")
+        last_refresh_started = state.get("last_refresh_started")
+        if not isinstance(refreshing_keys, set):
+            refreshing_keys = set()
+            state["refreshing_keys"] = refreshing_keys
+        if not isinstance(last_refresh_started, dict):
+            last_refresh_started = {}
+            state["last_refresh_started"] = last_refresh_started
+        if key in refreshing_keys:
+            return
+        if loop_time - float(last_refresh_started.get(key, 0) or 0) < REFRESH_DEBOUNCE_SECONDS:
+            return
+
+        refreshing_keys.add(key)
+        last_refresh_started[key] = loop_time
+        loading_sections = state.get("loading_sections")
+        if not isinstance(loading_sections, set):
+            loading_sections = set()
+            state["loading_sections"] = loading_sections
+        loading_sections.update(target_sections)
+        render_current_view()
+        try:
+            await refresh_sections(*target_sections, show_toast=show_toast)
+        finally:
+            loading_sections.difference_update(target_sections)
+            refreshing_keys.discard(key)
         render_current_view()
 
     def async_click(handler):
@@ -574,6 +662,8 @@ async def main(page: ft.Page):
         control = getattr(e, "control", None)
         old_disabled = getattr(control, "disabled", None) if control is not None else None
         old_text = getattr(control, "text", None) if control is not None and hasattr(control, "text") else None
+        if control is not None and old_disabled is True:
+            return
         try:
             if control is not None:
                 if hasattr(control, "disabled"):
@@ -1287,6 +1377,43 @@ async def main(page: ft.Page):
         except Exception as ex:
             show_message(error_message(ex))
 
+    def copy_container_state(target: ft.Container, source: ft.Container):
+        target.bgcolor = source.bgcolor
+        target.border_radius = source.border_radius
+        target.padding = source.padding
+        target.content = source.content
+
+    def update_device_card_controls(device: dict[str, Any], status_control: ft.Container, power_control: ft.Container, message_control: ft.Text):
+        copy_container_state(status_control, status_chip(str(device.get("connectionStatus", "unknown")), device.get("connectionStatus")))
+        copy_container_state(power_control, bool_chip(bool(device.get("isOn"))))
+        message_control.value = device.get("connectionMessage") or ""
+        for control in (status_control, power_control, message_control):
+            try:
+                if getattr(control, "page", None):
+                    control.update()
+            except Exception:
+                pass
+
+    async def toggle_device_card(device_id: int, status_control: ft.Container, power_control: ft.Container, message_control: ft.Text):
+        cached = find_device_by_id(device_id)
+        old_snapshot = dict(cached) if cached else None
+        if cached is not None:
+            cached["isOn"] = not bool(cached.get("isOn"))
+            cached["connectionStatus"] = "pending"
+            cached["connectionMessage"] = "Команда отправлена..."
+            update_device_card_controls(cached, status_control, power_control, message_control)
+        try:
+            result = await api_request("put", f"/api/devices/{device_id}/toggle")
+            if cached is not None and isinstance(result, dict):
+                cached.update(result)
+                update_device_card_controls(cached, status_control, power_control, message_control)
+        except Exception:
+            if cached is not None and old_snapshot is not None:
+                cached.clear()
+                cached.update(old_snapshot)
+                update_device_card_controls(cached, status_control, power_control, message_control)
+            raise
+
     def delete_device(device_id: int, device_name: str):
         async def action():
             try:
@@ -1815,6 +1942,7 @@ async def main(page: ft.Page):
             )
             for log in recent_logs
         ] or [card(TM("История пока пустая"))]
+        loading = loading_banner(*current_tab_sections())
 
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
@@ -1849,6 +1977,7 @@ async def main(page: ft.Page):
                         ],
                     ),
                 ),
+                *([loading] if loading else []),
                 ft.Row(
                     spacing=12,
                     controls=[
@@ -1872,11 +2001,15 @@ async def main(page: ft.Page):
 
     def devices_view() -> ft.Control:
         device_cards = []
-        for device in data["devices"]:
+        shown_devices = visible_items("devices", data["devices"])
+        for device in shown_devices:
             room_dd = dropdown(value=str(device.get("roomId")) if device.get("roomId") is not None else None, options=room_options(), width=220)
+            status_control = status_chip(str(device.get("connectionStatus", "unknown")), device.get("connectionStatus"))
+            power_control = bool_chip(bool(device.get("isOn")))
+            message_control = TM(device.get("connectionMessage") or "", size=12)
             action_buttons = []
             if device_type_capabilities(device.get("type")).get("canToggle", True):
-                action_buttons.append(ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=async_click(lambda e, device_id=device["id"]: run_button_action(e, lambda: toggle_device(device_id)))))
+                action_buttons.append(ft.ElevatedButton("Toggle", icon=ft.Icons.POWER_SETTINGS_NEW, on_click=async_click(lambda e, device_id=device["id"], sc=status_control, pc=power_control, mc=message_control: run_button_action(e, lambda: toggle_device_card(device_id, sc, pc, mc)))))
             if is_admin():
                 action_buttons.extend([
                     ft.OutlinedButton("Изменить", icon=ft.Icons.EDIT_OUTLINED, on_click=async_click(lambda e, d=device: run_button_action(e, lambda: open_device_dialog(d)))),
@@ -1894,14 +2027,14 @@ async def main(page: ft.Page):
                                     TM(f"ID: {device.get('externalId', '—')} · Комната: {device.get('room', 'Не указана')}", size=12),
                                     TM(f"Тип: {device_type_title(device.get('type'))} · {provider_title(device.get('provider'))}", size=12),
                                     TM(f"Протокол: {device.get('protocol', 'manual')} · Канал: {device.get('channel', 'local')}", size=12),
-                                    TM(device.get("connectionMessage") or "", size=12),
+                                    message_control,
                                 ],
                             ),
                             ft.Column(
                                 horizontal_alignment=ft.CrossAxisAlignment.END,
                                 controls=[
-                                    status_chip(str(device.get("connectionStatus", "unknown")), device.get("connectionStatus")),
-                                    bool_chip(bool(device.get("isOn"))),
+                                    status_control,
+                                    power_control,
                                 ],
                             ),
                         ],
@@ -1921,6 +2054,8 @@ async def main(page: ft.Page):
                     ),
                 )
             )
+        loading = loading_banner("devices")
+        more = show_more_button("devices", len(data["devices"]))
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
@@ -1932,7 +2067,9 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=([ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog())))] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build(show_toast=True))))]),
                     ],
                 ),
+                *([loading] if loading else []),
                 *(device_cards or [card(TM("Устройств пока нет"))]),
+                *([more] if more else []),
             ],
         )
 
@@ -1975,6 +2112,7 @@ async def main(page: ft.Page):
                 )
             )
 
+        loading = loading_banner("rooms", "devices")
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
@@ -1986,6 +2124,7 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать комнату", icon=ft.Icons.ADD, on_click=lambda e: open_room_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rooms", "devices", show_toast=True))))]),
                     ],
                 ),
+                *([loading] if loading else []),
                 *(room_cards or [card(TM("Комнат пока нет"))]),
             ],
         )
@@ -2029,6 +2168,7 @@ async def main(page: ft.Page):
                 )
             )
 
+        loading = loading_banner("scenes")
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
@@ -2040,13 +2180,15 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать сценарий", icon=ft.Icons.AUTO_AWESOME, on_click=lambda e: open_scene_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("scenes", show_toast=True))))]),
                     ],
                 ),
+                *([loading] if loading else []),
                 *(scene_cards or [card(TM("Сценариев пока нет"))]),
             ],
         )
 
     def rules_view() -> ft.Control:
         rule_cards = []
-        for rule in data["rules"]:
+        shown_rules = visible_items("rules", data["rules"])
+        for rule in shown_rules:
             if rule.get("actionKind") == "scene_run":
                 action_text = f"Запустить сценарий: {rule.get('actionSceneName', '—')}"
             else:
@@ -2067,6 +2209,8 @@ async def main(page: ft.Page):
                 )
             )
 
+        loading = loading_banner("rules")
+        more = show_more_button("rules", len(data["rules"]))
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
@@ -2078,7 +2222,9 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rules", show_toast=True))))]),
                     ],
                 ),
+                *([loading] if loading else []),
                 *(rule_cards or [card(TM("Правил пока нет"))]),
+                *([more] if more else []),
             ],
         )
 
@@ -2105,6 +2251,7 @@ async def main(page: ft.Page):
                 )
             )
 
+        loading = loading_banner("schedules")
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
@@ -2116,11 +2263,15 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("schedules", show_toast=True))))]),
                     ],
                 ),
+                *([loading] if loading else []),
                 *(schedule_cards or [card(TM("Расписаний пока нет"))]),
             ],
         )
 
     def history_view() -> ft.Control:
+        shown_logs = visible_items("logs", data["logs"])
+        loading = loading_banner("logs")
+        more = show_more_button("logs", len(data["logs"]))
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
@@ -2132,14 +2283,16 @@ async def main(page: ft.Page):
                         ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("logs", show_toast=True)))),
                     ],
                 ),
+                *([loading] if loading else []),
                 *([
                     card(
                         ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[T(str(log.get("message", "Событие")), weight=ft.FontWeight.BOLD), TM(fmt_dt(log.get("ts")), size=12)]),
                         TM(f"Тип: {log.get('eventType', 'EVENT')} · Источник: {log.get('source', 'api')}", size=12),
                         TM(f"deviceId={log.get('deviceId')} · sceneId={log.get('sceneId')} · runId={log.get('runId')}", size=12),
                     )
-                    for log in data["logs"]
+                    for log in shown_logs
                 ] or [card(TM("Логи пока пустые"))]),
+                *([more] if more else []),
             ],
         )
 
@@ -2149,10 +2302,16 @@ async def main(page: ft.Page):
         state["role"] = result.get("role", "User")
         state["tab"] = 0
         clear_data()
+        if isinstance(state.get("loading_sections"), set):
+            state["loading_sections"].update(current_tab_sections())
         build()
 
         async def load_after_auth(expected_token: str | None):
-            await refresh_all()
+            try:
+                await refresh_all()
+            finally:
+                if isinstance(state.get("loading_sections"), set):
+                    state["loading_sections"].difference_update(current_tab_sections())
             if state.get("token") == expected_token:
                 render_current_view()
 
@@ -2170,6 +2329,10 @@ async def main(page: ft.Page):
         state["login"] = ""
         state["role"] = ""
         state["tab"] = 0
+        if isinstance(state.get("loading_sections"), set):
+            state["loading_sections"].clear()
+        if isinstance(state.get("refreshing_keys"), set):
+            state["refreshing_keys"].clear()
         clear_data()
         build()
         show_message("Выход выполнен")
