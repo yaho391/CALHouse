@@ -9,6 +9,7 @@ import validation as validators
 API_BASE = "http://localhost:5000"
 API_TIMEOUT_SECONDS = 3.0
 DEBUG_DEVICE_FORM = False
+HISTORY_LOG_LIMIT = 30
 
 LIGHT_BG = "#E6F0FF"
 DARK_BG = "#0D1B2A"
@@ -443,7 +444,7 @@ async def main(page: ft.Page):
 
     async def load_logs(show_error: bool = False):
         try:
-            items = await api_request("get", "/api/logs?limit=80") or []
+            items = await api_request("get", f"/api/logs?limit={HISTORY_LOG_LIMIT}") or []
             data["logs"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
@@ -2302,7 +2303,7 @@ async def main(page: ft.Page):
             login = str(user.get("login", ""))
             role = str(user.get("role", "User"))
             is_active_value = bool(user.get("isActive", True))
-            role_dd = dropdown(value=role, width=220, options=[ft.dropdown.Option("Admin"), ft.dropdown.Option("User")])
+            role_dd = dropdown(value=role, width=260, options=[ft.dropdown.Option("Admin"), ft.dropdown.Option("User")])
             active_sw = ft.Switch(value=is_active_value)
             active_status_text = TM(f"Выбранный статус: {'Активен' if is_active_value else 'Заблокирован'}", size=12)
             password_tf = field(label="Новый пароль", password=True, can_reveal_password=True, width=280, error_max_lines=2)
@@ -2328,63 +2329,70 @@ async def main(page: ft.Page):
                     border=ft.border.all(1, c("border")),
                     content=ft.Column(
                         spacing=12,
+                        horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
                         controls=[
-                            ft.Row(
-                                wrap=True,
-                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                                vertical_alignment=ft.CrossAxisAlignment.START,
+                            ft.ResponsiveRow(
+                                columns=12,
                                 spacing=12,
-                                run_spacing=8,
+                                run_spacing=12,
                                 controls=[
-                                    ft.Column(
-                                        spacing=4,
-                                        width=300,
-                                        controls=[
-                                            T(login, weight=ft.FontWeight.BOLD, size=16),
-                                            TM(f"Текущая роль: {role}", size=12),
-                                            status_chip("Активен" if is_active_value else "Заблокирован", "enabled" if is_active_value else "disabled"),
-                                        ],
+                                    ft.Container(
+                                        col={"xs": 12, "sm": 12, "md": 6, "lg": 3},
+                                        content=ft.Column(
+                                            spacing=4,
+                                            controls=[
+                                                T(login, weight=ft.FontWeight.BOLD, size=16),
+                                                TM(f"Текущая роль: {role}", size=12),
+                                                status_chip("Активен" if is_active_value else "Заблокирован", "enabled" if is_active_value else "disabled"),
+                                            ],
+                                        ),
                                     ),
-                                    ft.Column(
-                                        spacing=4,
-                                        width=300,
-                                        controls=[
-                                            T("Изменить роль", weight=ft.FontWeight.BOLD),
-                                            role_dd,
-                                            TM("Admin может управлять пользователями и настройками", size=12),
-                                            TM("User может управлять устройствами и сценариями", size=12),
-                                            ft.OutlinedButton(
-                                                "Сохранить роль",
-                                                icon=ft.Icons.SAVE_OUTLINED,
-                                                on_click=async_click(lambda e, uid=user_id, dd=role_dd: save_role(e, uid, dd)),
-                                            ),
-                                        ],
+                                    ft.Container(
+                                        col={"xs": 12, "sm": 12, "md": 6, "lg": 3},
+                                        content=ft.Column(
+                                            spacing=4,
+                                            controls=[
+                                                T("Изменить роль", weight=ft.FontWeight.BOLD),
+                                                role_dd,
+                                                TM("Admin может управлять пользователями и настройками", size=12),
+                                                TM("User может управлять устройствами и сценариями", size=12),
+                                                ft.OutlinedButton(
+                                                    "Сохранить роль",
+                                                    icon=ft.Icons.SAVE_OUTLINED,
+                                                    on_click=async_click(lambda e, uid=user_id, dd=role_dd: save_role(e, uid, dd)),
+                                                ),
+                                            ],
+                                        ),
                                     ),
-                                    ft.Column(
-                                        spacing=4,
-                                        width=260,
-                                        controls=[
-                                            T("Активность аккаунта", weight=ft.FontWeight.BOLD),
-                                            ft.Row(spacing=8, controls=[active_sw, active_status_text]),
-                                            ft.OutlinedButton(
-                                                "Сохранить статус",
-                                                icon=ft.Icons.VERIFIED_USER_OUTLINED,
-                                                on_click=async_click(lambda e, uid=user_id, login_value=login, sw=active_sw: save_status(e, uid, login_value, sw)),
-                                            ),
-                                        ],
+                                    ft.Container(
+                                        col={"xs": 12, "sm": 12, "md": 6, "lg": 3},
+                                        content=ft.Column(
+                                            spacing=4,
+                                            controls=[
+                                                T("Активность аккаунта", weight=ft.FontWeight.BOLD),
+                                                ft.Row(spacing=8, wrap=True, controls=[active_sw, active_status_text]),
+                                                ft.OutlinedButton(
+                                                    "Сохранить статус",
+                                                    icon=ft.Icons.VERIFIED_USER_OUTLINED,
+                                                    on_click=async_click(lambda e, uid=user_id, login_value=login, sw=active_sw: save_status(e, uid, login_value, sw)),
+                                                ),
+                                            ],
+                                        ),
                                     ),
-                                    ft.Column(
-                                        spacing=4,
-                                        width=300,
-                                        controls=[
-                                            T("Сброс пароля", weight=ft.FontWeight.BOLD),
-                                            password_tf,
-                                            ft.OutlinedButton(
-                                                "Сбросить пароль",
-                                                icon=ft.Icons.LOCK_RESET,
-                                                on_click=async_click(lambda e, uid=user_id, tf=password_tf: save_password(e, uid, tf)),
-                                            ),
-                                        ],
+                                    ft.Container(
+                                        col={"xs": 12, "sm": 12, "md": 6, "lg": 3},
+                                        content=ft.Column(
+                                            spacing=4,
+                                            controls=[
+                                                T("Сброс пароля", weight=ft.FontWeight.BOLD),
+                                                password_tf,
+                                                ft.OutlinedButton(
+                                                    "Сбросить пароль",
+                                                    icon=ft.Icons.LOCK_RESET,
+                                                    on_click=async_click(lambda e, uid=user_id, tf=password_tf: save_password(e, uid, tf)),
+                                                ),
+                                            ],
+                                        ),
                                     ),
                                 ],
                             ),
@@ -2393,11 +2401,26 @@ async def main(page: ft.Page):
                 )
             )
 
-        return card(
-            T("Пользователи", weight=ft.FontWeight.BOLD),
-            TM("Управление ролями, статусом аккаунтов и сбросом паролей"),
-            *(user_cards or [TM("Пользователей пока нет")]),
-            ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("users", show_toast=True)))),
+        return ft.Container(
+            padding=16,
+            bgcolor=c("card"),
+            border_radius=16,
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(
+                spacing=10,
+                horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
+                controls=[
+                    T("Пользователи", weight=ft.FontWeight.BOLD),
+                    TM("Управление ролями, статусом аккаунтов и сбросом паролей"),
+                    *(user_cards or [TM("Пользователей пока нет")]),
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.END,
+                        controls=[
+                            ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("users", show_toast=True)))),
+                        ],
+                    ),
+                ],
+            ),
         )
 
     def settings_view() -> ft.Control:
@@ -2412,11 +2435,11 @@ async def main(page: ft.Page):
         return ft.Column(
             scroll=ft.ScrollMode.AUTO,
             spacing=14,
+            horizontal_alignment=ft.CrossAxisAlignment.STRETCH,
             controls=[
                 T("Настройки", size=22, weight=ft.FontWeight.BOLD),
                 card(T("Интерфейс", weight=ft.FontWeight.BOLD), dark_sw, ft.ElevatedButton("Сохранить", on_click=save_settings)),
                 users_admin_panel(),
-                card(T("Подключение к API", weight=ft.FontWeight.BOLD), TM(f"Base URL: {API_BASE}"), TM("backend из backend/CalHouse.Api")),
             ],
         )
 
