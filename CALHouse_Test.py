@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import flet as ft
 import asyncio
 import httpx
@@ -8,6 +9,75 @@ import validation as validators
 API_BASE = "http://localhost:5000"
 API_TIMEOUT_SECONDS = 3.0
 DEBUG_DEVICE_FORM = False
+
+LIGHT_BG = "#E6F0FF"
+DARK_BG = "#0D1B2A"
+GRADIENT_LIGHT = "#EAF7F2"
+GRADIENT_LIGHT_END = "#CFE3FF"
+GRADIENT_DARK = "#1E3A5F"
+ACCENT = "#2DD4BF"
+ACCENT_HOVER = "#14B8A6"
+LIGHT_CARD = "#FFFFFF"
+LIGHT_CARD_ALT = "#F8FAFC"
+LIGHT_TEXT = "#425885"
+LIGHT_MUTED_TEXT = "#6B7EA6"
+DARK_CARD = "#111827"
+DARK_CARD_ALT = "#1F2937"
+DARK_TEXT = "#2AA6B8"
+DARK_MUTED_TEXT = "#1E7F93"
+BORDER_LIGHT = "#D8E3F0"
+BORDER_DARK = "#243244"
+
+LIGHT_PALETTE = {
+    "bg": LIGHT_BG,
+    "card": LIGHT_CARD,
+    "border": BORDER_LIGHT,
+    "text": LIGHT_TEXT,
+    "muted": LIGHT_MUTED_TEXT,
+    "field": LIGHT_CARD_ALT,
+    "nav": LIGHT_CARD,
+    "nav_indicator": GRADIENT_LIGHT,
+    "accent": ACCENT,
+    "accent_hover": ACCENT_HOVER,
+    "gradient_start": GRADIENT_LIGHT,
+    "gradient_end": GRADIENT_LIGHT_END,
+    "hero_text": LIGHT_TEXT,
+    "hero_muted": LIGHT_MUTED_TEXT,
+    "warning_text": "#92400E",
+    "snackbar_bg": GRADIENT_DARK,
+    "snackbar_text": DARK_TEXT,
+}
+
+DARK_PALETTE = {
+    "bg": DARK_BG,
+    "card": DARK_CARD,
+    "border": BORDER_DARK,
+    "text": DARK_TEXT,
+    "muted": DARK_MUTED_TEXT,
+    "field": DARK_CARD_ALT,
+    "nav": DARK_CARD,
+    "nav_indicator": BORDER_DARK,
+    "accent": ACCENT,
+    "accent_hover": ACCENT_HOVER,
+    "gradient_start": GRADIENT_DARK,
+    "gradient_end": DARK_BG,
+    "hero_text": DARK_TEXT,
+    "hero_muted": DARK_MUTED_TEXT,
+    "warning_text": "#FBBF24",
+    "snackbar_bg": DARK_CARD,
+    "snackbar_text": DARK_TEXT,
+}
+
+STATUS_COLORS = {
+    "connected": ("#DCFCE7", "#166534"),
+    "completed": ("#DCFCE7", "#166534"),
+    "enabled": ("#DBEAFE", "#1D4ED8"),
+    "no_connection": ("#FEE2E2", "#991B1B"),
+    "warning": ("#FEF3C7", "#92400E"),
+    "disabled": ("#E2E8F0", "#475569"),
+    "unknown": ("#E2E8F0", "#475569"),
+}
+
 DEFAULT_DEVICE_TYPES = [
     {"code": "light", "displayName": "Свет", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
     {"code": "socket", "displayName": "Розетка", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
@@ -96,27 +166,7 @@ async def main(page: ft.Page):
     content = ft.Container(expand=True, padding=20)
 
     def palette() -> dict[str, str]:
-        if state["dark"]:
-            return {
-                "bg": "#191b21",
-                "card": "#272b33",
-                "border": "#181c24",
-                "text": "#f8fafc",
-                "muted": "#94a3b8",
-                "field": "#4a4a4a",
-                "nav": "#1f232a",
-                "accent": "#14b385",
-            }
-        return {
-            "bg": "#f3f4f6",
-            "card": "#ffffff",
-            "border": "#e5e7eb",
-            "text": "#0f172a",
-            "muted": "#64748b",
-            "field": "#eef2f7",
-            "nav": "#ffffff",
-            "accent": "#14b385",
-        }
+        return DARK_PALETTE if state["dark"] else LIGHT_PALETTE
 
     def c(name: str) -> str:
         return palette()[name]
@@ -151,9 +201,44 @@ async def main(page: ft.Page):
         return ft.Dropdown(bgcolor=c("field"), border_color=c("border"), **kwargs)
 
     def show_message(text: str):
-        page.snack_bar = ft.SnackBar(ft.Text(text))
+        page.snack_bar = ft.SnackBar(
+            bgcolor=c("snackbar_bg"),
+            content=ft.Text(text, color=c("snackbar_text")),
+        )
         page.snack_bar.open = True
         page.update()
+
+    def invalid_input_message(detail: Any = None) -> str:
+        prefix = "Данные введены неправильно"
+        text = str(detail or "").strip()
+        if not text:
+            return prefix
+        if text.startswith(prefix):
+            return text
+        return f"{prefix}: {text}"
+
+    def error_message(ex: Exception) -> str:
+        if isinstance(ex, ValueError):
+            return invalid_input_message(ex)
+        return str(ex)
+
+    def api_error_message(path: str, status_code: int, error_data: dict[str, Any], fallback: str) -> str:
+        code = str(error_data.get("code") or "").strip()
+        auth_messages = {
+            "AUTH_INVALID_CREDENTIALS": "Неправильно введен логин или пароль",
+            "AUTH_USER_BLOCKED": "Пользователь заблокирован",
+            "AUTH_LOGIN_EXISTS": "Такой логин уже существует",
+            "AUTH_LOGIN_INVALID": "Логин заполнен неправильно",
+            "AUTH_PASSWORD_INVALID": "Пароль заполнен неправильно",
+            "AUTH_PASSWORD_CONFIRMATION_MISMATCH": "Пароли не совпадают",
+        }
+        if code in auth_messages:
+            return auth_messages[code] if code == "AUTH_INVALID_CREDENTIALS" else invalid_input_message(auth_messages[code])
+        if path == "/api/auth/login" and str(fallback or "").strip().lower() == "invalid login or password":
+            return "Неправильно введен логин или пароль"
+        if path.startswith("/api/auth/") and status_code == 400:
+            return invalid_input_message(fallback)
+        return fallback
 
     def show_dialog(dialog: ft.AlertDialog):
         if dialog not in page.overlay:
@@ -182,6 +267,7 @@ async def main(page: ft.Page):
                 except Exception:
                     error_data = {}
                 message = error_data.get("message") or error_data.get("error") or f"HTTP {response.status_code}"
+                message = api_error_message(path, response.status_code, error_data, message)
                 error_details = error_data.get("errors") or error_data.get("validationErrors") or error_data.get("details")
                 if error_details:
                     if isinstance(error_details, dict):
@@ -199,6 +285,10 @@ async def main(page: ft.Page):
                         details_text = str(error_details)
                     if details_text:
                         message = f"{message}: {details_text}"
+                if response.status_code == 400 and not (
+                    path == "/api/auth/login" and "логин или пароль" in message.lower()
+                ):
+                    message = invalid_input_message(message)
                 raise RuntimeError(message)
             if not response.text:
                 return None
@@ -237,7 +327,7 @@ async def main(page: ft.Page):
             ok = True
         except Exception as ex:
             if hasattr(control, "error_text"):
-                control.error_text = str(ex)
+                control.error_text = error_message(ex)
             ok = False
         try:
             if getattr(control, "page", None):
@@ -294,7 +384,7 @@ async def main(page: ft.Page):
         except Exception as ex:
             data["catalog"] = {}
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def load_devices(show_error: bool = False):
         try:
@@ -302,7 +392,7 @@ async def main(page: ft.Page):
             data["devices"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def load_rooms(show_error: bool = False):
         try:
@@ -310,7 +400,7 @@ async def main(page: ft.Page):
             data["rooms"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def load_scenes(show_error: bool = False):
         try:
@@ -318,7 +408,7 @@ async def main(page: ft.Page):
             data["scenes"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def load_rules(show_error: bool = False):
         try:
@@ -326,7 +416,7 @@ async def main(page: ft.Page):
             data["rules"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def load_schedules(show_error: bool = False):
         try:
@@ -334,7 +424,7 @@ async def main(page: ft.Page):
             data["schedules"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def load_logs(show_error: bool = False):
         try:
@@ -342,7 +432,7 @@ async def main(page: ft.Page):
             data["logs"] = items if isinstance(items, list) else []
         except Exception as ex:
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def load_users(show_error: bool = False):
         if not is_admin():
@@ -354,7 +444,7 @@ async def main(page: ft.Page):
         except Exception as ex:
             data["users"] = []
             if show_error:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
     async def refresh_all(show_toast: bool = False):
         if not is_authenticated():
@@ -434,7 +524,7 @@ async def main(page: ft.Page):
                 return await result
             return result
         except Exception as ex:
-            show_message(str(ex))
+            show_message(error_message(ex))
         finally:
             if control is not None:
                 if old_disabled is not None and hasattr(control, "disabled"):
@@ -650,16 +740,7 @@ async def main(page: ft.Page):
         show_dialog(dialog)
 
     def status_chip(text: str, status: str | None):
-        mapping = {
-            "connected": ("#dcfce7", "#166534"),
-            "completed": ("#dcfce7", "#166534"),
-            "enabled": ("#dbeafe", "#1d4ed8"),
-            "no_connection": ("#fee2e2", "#991b1b"),
-            "warning": ("#fef3c7", "#92400e"),
-            "disabled": ("#e2e8f0", "#475569"),
-            "unknown": ("#e2e8f0", "#475569"),
-        }
-        bg, fg = mapping.get(str(status or "unknown"), ("#e2e8f0", "#475569"))
+        bg, fg = STATUS_COLORS.get(str(status or "unknown"), STATUS_COLORS["unknown"])
         return ft.Container(
             padding=ft.padding.symmetric(horizontal=12, vertical=6),
             border_radius=999,
@@ -702,7 +783,7 @@ async def main(page: ft.Page):
         connection_controls: dict[str, ft.TextField] = {}
         connection_fields_column = ft.Column(spacing=10, controls=[])
         note_text = TM("", size=12)
-        form_status_text = TM("", size=12, color="#92400e")
+        form_status_text = TM("", size=12, color=c("warning_text"))
         test_result = TM("", size=12)
         active_schema_names: set[str] = set()
         active_schema_defs: dict[str, dict[str, Any]] = {}
@@ -999,7 +1080,7 @@ async def main(page: ft.Page):
                     show_message(str(result.get("message", "Проверка завершена")))
                 page.update()
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         async def save():
             try:
@@ -1067,7 +1148,7 @@ async def main(page: ft.Page):
                     dialog.update()
                 except Exception:
                     page.update()
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -1109,14 +1190,14 @@ async def main(page: ft.Page):
             await refresh_and_build("devices", "rooms", "logs")
             show_message("Привязка устройства обновлена")
         except Exception as ex:
-            show_message(str(ex))
+            show_message(error_message(ex))
 
     async def toggle_device(device_id: int):
         try:
             await api_request("put", f"/api/devices/{device_id}/toggle")
             await refresh_and_build("devices", "logs")
         except Exception as ex:
-            show_message(str(ex))
+            show_message(error_message(ex))
 
     def delete_device(device_id: int, device_name: str):
         async def action():
@@ -1125,7 +1206,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("devices", "rooms", "logs")
                 show_message(f"Устройство удалено: {device_name}")
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         confirm_action("Удалить устройство", f"Удалить устройство «{device_name}»?", action)
 
@@ -1155,7 +1236,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("rooms", "devices", "logs")
                 show_message(message)
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -1175,7 +1256,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("rooms", "devices", "logs")
                 show_message(f"Комната удалена: {room_name}")
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         confirm_action("Удалить комнату", f"Удалить комнату «{room_name}»?", action)
 
@@ -1255,7 +1336,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("scenes", "logs")
                 show_message(message)
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -1286,7 +1367,7 @@ async def main(page: ft.Page):
             await refresh_and_build("devices", "scenes", "logs")
             show_message(f"Сценарий запущен: {scene_name}")
         except Exception as ex:
-            show_message(str(ex))
+            show_message(error_message(ex))
 
     def delete_scene(scene_id: int, scene_name: str):
         async def action():
@@ -1295,7 +1376,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("scenes", "logs")
                 show_message(f"Сценарий удален: {scene_name}")
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         confirm_action("Удалить сценарий", f"Удалить сценарий «{scene_name}»?", action)
 
@@ -1376,7 +1457,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("rules", "logs")
                 show_message(message)
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -1411,7 +1492,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("rules", "logs")
                 show_message(f"Правило удалено: {rule_name}")
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         confirm_action("Удалить правило", f"Удалить правило «{rule_name}»?", action)
 
@@ -1421,7 +1502,7 @@ async def main(page: ft.Page):
             await refresh_and_build("rules", "logs")
             show_message("Состояние правила обновлено")
         except Exception as ex:
-            show_message(str(ex))
+            show_message(error_message(ex))
 
     def open_schedule_dialog(schedule: dict[str, Any] | None = None):
         editing = schedule is not None
@@ -1491,7 +1572,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("schedules", "logs")
                 show_message(message)
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -1526,7 +1607,7 @@ async def main(page: ft.Page):
                 await refresh_and_build("schedules", "logs")
                 show_message(f"Расписание удалено: {schedule_name}")
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         confirm_action("Удалить расписание", f"Удалить расписание «{schedule_name}»?", action)
 
@@ -1536,7 +1617,7 @@ async def main(page: ft.Page):
             await refresh_and_build("schedules", "logs")
             show_message("Состояние расписания обновлено")
         except Exception as ex:
-            show_message(str(ex))
+            show_message(error_message(ex))
 
     async def run_due_schedules():
         try:
@@ -1544,7 +1625,7 @@ async def main(page: ft.Page):
             await refresh_and_build("devices", "schedules", "scenes", "logs")
             show_message(str(result.get("message", "Проверка расписаний выполнена")))
         except Exception as ex:
-            show_message(str(ex))
+            show_message(error_message(ex))
 
     def open_event_dialog():
         source_device_dd = dropdown(label="Источник события", options=device_options(sensor_first=True))
@@ -1587,7 +1668,7 @@ async def main(page: ft.Page):
                 count = len(result.get("triggeredRules", []) or [])
                 show_message(f"Событие отправлено. Сработало правил: {count}")
             except Exception as ex:
-                show_message(str(ex))
+                show_message(error_message(ex))
 
         dialog = ft.AlertDialog(
             modal=True,
@@ -1620,14 +1701,18 @@ async def main(page: ft.Page):
                 ft.Container(
                     padding=18,
                     border_radius=18,
-                    gradient=ft.LinearGradient(colors=["#1ab869", "#269ba6"]),
+                    gradient=ft.LinearGradient(
+                        begin=ft.Alignment(-1, -1),
+                        end=ft.Alignment(1, 1),
+                        colors=[c("gradient_start"), c("gradient_end")],
+                    ),
                     content=ft.Column(
                         spacing=8,
                         controls=[
-                            T("CALHouse", size=26, weight=ft.FontWeight.BOLD, color="#ffffff"),
+                            T("CALHouse", size=26, weight=ft.FontWeight.BOLD, color=c("hero_text")),
                             ft.Text(
                                 "Привет)))))",
-                                color="#e0e7ff",
+                                color=c("hero_muted"),
                             ),
                             ft.Row(
                                 spacing=10,
@@ -1636,7 +1721,7 @@ async def main(page: ft.Page):
                                     ft.OutlinedButton(
                                         "Отправить событие",
                                         icon=ft.Icons.SENSORS,
-                                        style=ft.ButtonStyle(color="#ffffff"),
+                                        style=ft.ButtonStyle(color=c("hero_text")),
                                         on_click=lambda e: open_event_dialog(),
                                     ),
                                 ],
@@ -1960,12 +2045,62 @@ async def main(page: ft.Page):
         password_tf = field(label="Пароль", password=True, can_reveal_password=True)
         confirm_tf = field(label="Повтор пароля", password=True, can_reveal_password=True)
 
+        def validate_auth_login(value: Any) -> str:
+            result = validators.clean(value)
+            if len(result) < 3 or len(result) > 50:
+                raise ValueError("Логин: длина 3-50 символов")
+            return validators.require_code(result, "Логин", 50)
+
+        def validate_auth_password(value: Any, label: str = "Пароль") -> str:
+            result = str(value or "")
+            if len(result) < 6 or len(result) > 100:
+                raise ValueError(f"{label}: длина 6-100 символов")
+            return result
+
+        def validate_confirm_password(value: Any) -> str:
+            result = validate_auth_password(value, "Повтор пароля")
+            if result != (password_tf.value or ""):
+                raise ValueError("Повтор пароля: пароли не совпадают")
+            return result
+
+        bind_live_validator(login_tf, validate_auth_login)
+
+        def on_password_change(e):
+            validate_control(e.control, validate_auth_password)
+            if confirm_tf.value:
+                validate_control(confirm_tf, validate_confirm_password)
+
+        password_tf.on_change = on_password_change
+        bind_live_validator(confirm_tf, validate_confirm_password)
+
         async def submit_login():
-            result = await api_request("post", "/api/auth/login", {"login": (login_tf.value or "").strip(), "password": password_tf.value or ""})
+            ensure_controls_valid(
+                [
+                    (login_tf, validate_auth_login),
+                    (password_tf, validate_auth_password),
+                ]
+            )
+            try:
+                result = await api_request("post", "/api/auth/login", {"login": (login_tf.value or "").strip(), "password": password_tf.value or ""})
+            except RuntimeError as ex:
+                if "логин или пароль" in str(ex).lower():
+                    password_tf.error_text = "Неправильно введен логин или пароль"
+                    try:
+                        password_tf.update()
+                    except Exception:
+                        page.update()
+                raise
             await apply_auth_result(result or {})
             show_message("Вход выполнен")
 
         async def submit_register():
+            ensure_controls_valid(
+                [
+                    (login_tf, validate_auth_login),
+                    (password_tf, validate_auth_password),
+                    (confirm_tf, validate_confirm_password),
+                ]
+            )
             result = await api_request(
                 "post",
                 "/api/auth/register",
@@ -2087,6 +2222,7 @@ async def main(page: ft.Page):
     nav = ft.NavigationBar(
         selected_index=0,
         bgcolor=c("nav"),
+        indicator_color=c("nav_indicator"),
         destinations=[
             ft.NavigationBarDestination(icon=ft.Icons.HOME_OUTLINED, selected_icon=ft.Icons.HOME, label="Главная"),
             ft.NavigationBarDestination(icon=ft.Icons.FLASH_ON_OUTLINED, selected_icon=ft.Icons.FLASH_ON, label="Устройства"),
@@ -2118,6 +2254,7 @@ async def main(page: ft.Page):
 
         page.navigation_bar = nav
         nav.bgcolor = c("nav")
+        nav.indicator_color = c("nav_indicator")
         nav.selected_index = state["tab"]
         page.appbar = ft.AppBar(
             bgcolor=c("nav"),
