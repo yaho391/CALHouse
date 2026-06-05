@@ -261,7 +261,7 @@ public sealed class DeviceCatalogService
                 Code = "motion_sensor",
                 DisplayName = "Датчик движения",
                 Capabilities = sensor,
-                AllowedProviders = ["mock", "mqtt", "zigbee2mqtt", "homeassistant"],
+                AllowedProviders = ["mock", "demo", "mqtt", "zigbee2mqtt", "homeassistant"],
                 OptionalFields = ["motion_topic", "battery_topic"],
                 Actions = [],
                 LegacyNames = ["Датчик", "Р”Р°С‚С‡РёРє"],
@@ -271,10 +271,20 @@ public sealed class DeviceCatalogService
                 Code = "temperature_sensor",
                 DisplayName = "Датчик температуры",
                 Capabilities = sensor,
-                AllowedProviders = ["mock", "mqtt", "zigbee2mqtt", "homeassistant"],
+                AllowedProviders = ["mock", "demo", "mqtt", "zigbee2mqtt", "homeassistant"],
                 OptionalFields = ["temperature_topic", "humidity_topic", "battery_topic"],
                 Actions = [],
                 LegacyNames = ["Климат", "РљР»РёРјР°С‚"],
+            },
+            new()
+            {
+                Code = "leak_sensor",
+                DisplayName = "Датчик протечки",
+                Capabilities = sensor,
+                AllowedProviders = ["mock", "demo", "mqtt", "zigbee2mqtt", "homeassistant"],
+                OptionalFields = ["leak_topic", "battery_topic"],
+                Actions = [],
+                LegacyNames = ["Датчик протечки"],
             },
             new()
             {

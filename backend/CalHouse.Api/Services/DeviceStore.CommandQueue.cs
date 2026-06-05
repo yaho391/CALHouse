@@ -158,13 +158,14 @@ public partial class DeviceStore
         return result;
     }
 
-    public DeviceEventResult ProcessIncomingEventQueued(int? deviceId, string? deviceExternalId, string eventType, string value, string? message, DeviceCommandQueue queue)
+    public DeviceEventResult ProcessIncomingEventQueued(int? deviceId, string? deviceExternalId, string eventType, string value, string? message, DeviceCommandQueue queue, string? source = null)
     {
         ArgumentNullException.ThrowIfNull(queue);
 
-        var cleanEventType = NormalizeCodeValue(eventType, "Тип события обязателен", "EVENT_TYPE_REQUIRED", MaxChannelLength, "Тип события может содержать только латиницу, цифры, точку, дефис и подчёркивание", "EVENT_TYPE_INVALID");
+        var cleanEventType = NormalizeEventTypeAlias(NormalizeCodeValue(eventType, "Тип события обязателен", "EVENT_TYPE_REQUIRED", MaxChannelLength, "Тип события может содержать только латиницу, цифры, точку, дефис и подчёркивание", "EVENT_TYPE_INVALID"));
         var cleanValue = NormalizeRequiredBounded(value, "Значение события обязательно", "EVENT_VALUE_REQUIRED", MaxEventValueLength, "Значение события слишком длинное", "EVENT_VALUE_TOO_LONG");
         var cleanMessage = NormalizeFreeTextOptional(message, "Сообщение события", 1000, "EVENT_MESSAGE_INVALID");
+        var cleanSource = NormalizeEventSource(source);
         var queuedRuns = new List<(int RuleId, int RunId)>();
 
         DeviceEventResult result;
@@ -189,7 +190,7 @@ public partial class DeviceStore
             touchDevice.Parameters.AddWithValue("@id", sourceDevice.Id);
             touchDevice.ExecuteNonQuery();
 
-            LogEvent(db, transaction, "info", "event-ingest", "DEVICE_EVENT_RECEIVED", $"Event \"{cleanEventType}={cleanValue}\" received from device \"{sourceDevice.Name}\"", deviceId: sourceDevice.Id, roomId: sourceDevice.RoomId);
+            LogEvent(db, transaction, "info", cleanSource, "DEVICE_EVENT_RECEIVED", $"Event \"{cleanEventType}={cleanValue}\" received from device \"{sourceDevice.Name}\"", deviceId: sourceDevice.Id, roomId: sourceDevice.RoomId);
 
             var triggered = new List<RuleRun>();
             foreach (var rule in ReadEnabledRulesForEvent(db, sourceDevice.Id, cleanEventType))
@@ -229,6 +230,22 @@ public partial class DeviceStore
         }
 
         return result;
+    }
+
+    private static string NormalizeEventTypeAlias(string eventType)
+    {
+        return eventType.Trim().ToLowerInvariant() switch
+        {
+            "leak" => "water_leak",
+            "temperature_changed" => "temperature",
+            _ => eventType.Trim().ToLowerInvariant(),
+        };
+    }
+
+    private static string NormalizeEventSource(string? source)
+    {
+        var clean = NormalizeOptional(source, "event-ingest").Trim().ToLowerInvariant();
+        return clean is "visual_demo" or "demo" ? clean : "event-ingest";
     }
 
     private void ExecuteQueuedDeviceStateCommand(int id, bool targetIsOn, string source)

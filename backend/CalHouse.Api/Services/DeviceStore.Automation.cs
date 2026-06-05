@@ -277,7 +277,7 @@ WHERE Id = @id;";
 
     public DeviceEventResult ProcessIncomingEvent(int? deviceId, string? deviceExternalId, string eventType, string value, string? message = null)
     {
-        var cleanEventType = NormalizeCodeValue(eventType, "Тип события обязателен", "EVENT_TYPE_REQUIRED", MaxChannelLength, "Тип события может содержать только латиницу, цифры, точку, дефис и подчёркивание", "EVENT_TYPE_INVALID");
+        var cleanEventType = NormalizeEventTypeAlias(NormalizeCodeValue(eventType, "Тип события обязателен", "EVENT_TYPE_REQUIRED", MaxChannelLength, "Тип события может содержать только латиницу, цифры, точку, дефис и подчёркивание", "EVENT_TYPE_INVALID"));
         var cleanValue = NormalizeRequiredBounded(value, "Значение события обязательно", "EVENT_VALUE_REQUIRED", MaxEventValueLength, "Значение события слишком длинное", "EVENT_VALUE_TOO_LONG");
         var cleanMessage = NormalizeFreeTextOptional(message, "Сообщение события", 1000, "EVENT_MESSAGE_INVALID");
 
@@ -1361,6 +1361,11 @@ WHERE Id = @id;";
         if (normalizedType == "temperature_sensor" && normalizedEvent is not "temperature" and not "humidity" and not "battery" and not "online" and not "offline")
         {
             throw new ValidationProblemException("Для датчика температуры допустимы события temperature, humidity, battery, online, offline", "EVENT_TYPE_DEVICE_INCOMPATIBLE");
+        }
+
+        if (normalizedType == "leak_sensor" && normalizedEvent is not "water_leak" and not "battery" and not "online" and not "offline")
+        {
+            throw new ValidationProblemException("Для датчика протечки допустимы события water_leak, battery, online, offline", "EVENT_TYPE_DEVICE_INCOMPATIBLE");
         }
     }
 

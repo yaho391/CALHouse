@@ -94,6 +94,7 @@ DEMO_DEVICE_TYPES = {
     "demo_light": {
         "title": "Лампа",
         "device_type": "light",
+        "category": "toggle",
         "icon": ft.Icons.LIGHTBULB_OUTLINE,
         "icon_on": ft.Icons.LIGHTBULB,
         "status_on": "включена",
@@ -103,11 +104,40 @@ DEMO_DEVICE_TYPES = {
     "demo_socket": {
         "title": "Розетка",
         "device_type": "socket",
+        "category": "toggle",
         "icon": ft.Icons.OUTLET,
         "icon_on": ft.Icons.ELECTRICAL_SERVICES,
         "status_on": "включена",
         "status_off": "выключена",
         "model": "Demo Socket",
+    },
+    "demo_motion_sensor": {
+        "title": "Датчик движения",
+        "device_type": "motion_sensor",
+        "category": "motion",
+        "icon": ft.Icons.SENSORS_OUTLINED,
+        "icon_on": ft.Icons.SENSORS,
+        "status_on": "Движение обнаружено",
+        "status_off": "Движения нет",
+        "model": "Demo Motion Sensor",
+    },
+    "demo_temperature_sensor": {
+        "title": "Датчик температуры",
+        "device_type": "temperature_sensor",
+        "category": "temperature",
+        "icon": ft.Icons.DEVICE_THERMOSTAT,
+        "model": "Demo Temperature Sensor",
+        "default_temperature": 24,
+    },
+    "demo_leak_sensor": {
+        "title": "Датчик протечки",
+        "device_type": "leak_sensor",
+        "category": "leak",
+        "icon": ft.Icons.WATER_DROP,
+        "icon_on": ft.Icons.WATER_DAMAGE,
+        "status_on": "Обнаружена протечка",
+        "status_off": "Протечки нет",
+        "model": "Demo Leak Sensor",
     },
 }
 
@@ -117,6 +147,7 @@ DEFAULT_DEVICE_TYPES = [
     {"code": "relay", "displayName": "Реле", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
     {"code": "motion_sensor", "displayName": "Датчик движения", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
     {"code": "temperature_sensor", "displayName": "Датчик температуры", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
+    {"code": "leak_sensor", "displayName": "Датчик протечки", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
     {"code": "thermostat", "displayName": "Термостат", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
     {"code": "camera", "displayName": "Камера", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
     {"code": "generic", "displayName": "Другое", "capabilities": {"canToggle": False}, "allowedProviders": ["mock"]},
@@ -166,6 +197,7 @@ EVENT_TYPE_LABELS = {
 EVENT_TYPES_BY_DEVICE_TYPE = {
     "motion_sensor": {"motion", "battery", "online", "offline"},
     "temperature_sensor": {"temperature", "humidity", "battery", "online", "offline"},
+    "leak_sensor": {"water_leak", "battery", "online", "offline"},
 }
 DEFAULT_SCHEDULE_DAYS = [
     {"value": 1, "title": "Пн"},
@@ -231,6 +263,7 @@ async def main(page: ft.Page):
         "visual_room_id": None,
         "visual_api_logs": [],
         "visual_pending_devices": set(),
+        "visual_sensor_values": {},
     }
     api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
 
@@ -915,7 +948,7 @@ async def main(page: ft.Page):
     def device_options(sensor_first: bool = False) -> list[ft.dropdown.Option]:
         items = data["devices"]
         if sensor_first:
-            sensor_types = {"motion_sensor", "temperature_sensor"}
+            sensor_types = {"motion_sensor", "temperature_sensor", "leak_sensor"}
             items = sorted(items, key=lambda item: (0 if device_type_code(item.get("type")) in sensor_types else 1, str(item.get("name", ""))))
             return [ft.dropdown.Option(str(device["id"]), device["name"]) for device in items]
         return [ft.dropdown.Option(str(device["id"]), device["name"]) for device in items]
@@ -2093,8 +2126,15 @@ async def main(page: ft.Page):
         kind = str(connection.get("demoType") or "")
         if kind in DEMO_DEVICE_TYPES:
             return kind
-        if device_type_code(device.get("type")) == "socket":
+        type_code = device_type_code(device.get("type"))
+        if type_code == "socket":
             return "demo_socket"
+        if type_code == "motion_sensor":
+            return "demo_motion_sensor"
+        if type_code == "temperature_sensor":
+            return "demo_temperature_sensor"
+        if type_code == "leak_sensor":
+            return "demo_leak_sensor"
         return "demo_light"
 
     def visual_room_demo_devices(room_id: str | None) -> list[dict[str, Any]]:
@@ -2198,12 +2238,106 @@ async def main(page: ft.Page):
             pending.discard(device_id)
             render_current_view()
 
-    def build_visual_demo_device(device: dict[str, Any], index: int) -> ft.Control:
+    def visual_sensor_values() -> dict[str, dict[str, Any]]:
+        values = state.get("visual_sensor_values")
+        if not isinstance(values, dict):
+            values = {}
+            state["visual_sensor_values"] = values
+        return values
+
+    def visual_sensor_state(device: dict[str, Any]) -> dict[str, Any]:
+        device_id = str(device.get("id", ""))
+        values = visual_sensor_values()
+        current = values.get(device_id)
+        if isinstance(current, dict):
+            return current
+
+        connection = device.get("connection") or {}
         kind = demo_device_kind(device)
-        config = DEMO_DEVICE_TYPES.get(kind, DEMO_DEVICE_TYPES["demo_light"])
-        is_on = bool(device.get("isOn"))
+        initial: dict[str, Any] = {}
+        if kind == "demo_temperature_sensor":
+            raw = connection.get("temperature", 24)
+            try:
+                initial["temperature"] = int(float(str(raw).replace(",", ".")))
+            except Exception:
+                initial["temperature"] = 24
+        if kind == "demo_motion_sensor":
+            initial["motion"] = str(connection.get("motion", "false")).lower() == "true"
+        if kind == "demo_leak_sensor":
+            initial["leak"] = str(connection.get("leak", "false")).lower() == "true"
+        values[device_id] = initial
+        return initial
+
+    def set_visual_sensor_value(device: dict[str, Any], key: str, value: Any):
+        visual_sensor_state(device)[key] = value
+
+    async def clear_visual_motion_later(device: dict[str, Any]):
+        device_id = int(device.get("id", 0))
+        await asyncio.sleep(1.2)
         pending = state.get("visual_pending_devices")
-        is_pending = isinstance(pending, set) and int(device.get("id", 0)) in pending
+        if isinstance(pending, set) and device_id in pending:
+            return
+        set_visual_sensor_value(device, "motion", False)
+        render_current_view()
+
+    async def send_visual_demo_event(
+        device: dict[str, Any],
+        event_type: str,
+        value: Any,
+        success_message: str,
+        state_update: tuple[str, Any] | None = None,
+        message: str | None = None,
+        after_success=None,
+    ):
+        device_id = int(device.get("id", 0))
+        if not device_id:
+            return
+        pending = state.get("visual_pending_devices")
+        if not isinstance(pending, set):
+            pending = set()
+            state["visual_pending_devices"] = pending
+        if device_id in pending:
+            return
+
+        pending.add(device_id)
+        render_current_view()
+        clean_value = str(value).lower() if isinstance(value, bool) else str(value)
+        payload = {
+            "deviceId": device_id,
+            "eventType": event_type,
+            "value": clean_value,
+            "source": "visual_demo",
+            "message": message or success_message,
+        }
+        try:
+            await visualization_api_request("post", "/api/events", payload)
+            if state_update is not None:
+                set_visual_sensor_value(device, state_update[0], state_update[1])
+            if after_success is not None:
+                after_success()
+            await refresh_sections("devices", "logs")
+            show_message(success_message)
+        except Exception as ex:
+            show_message(f"Не удалось отправить событие: {error_message(ex)}")
+        finally:
+            pending.discard(device_id)
+            render_current_view()
+
+    def visual_pending_row(text: str) -> ft.Control:
+        return ft.Row(
+            alignment=ft.MainAxisAlignment.CENTER,
+            controls=[ft.ProgressRing(width=14, height=14, stroke_width=2), TM(text, size=11)],
+        )
+
+    def visual_device_header(config: dict[str, Any], device: dict[str, Any], icon_name: str = "icon", icon_color: str | None = None) -> list[ft.Control]:
+        return [
+            ft.Icon(config.get(icon_name, config["icon"]), size=34, color=icon_color or c("accent")),
+            T(str(device.get("name", config["title"])), weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+        ]
+
+    def render_demo_toggle_device(device: dict[str, Any], config: dict[str, Any], is_pending: bool) -> ft.Control:
+        kind = demo_device_kind(device)
+        is_on = bool(device.get("isOn"))
         lamp_on = kind == "demo_light" and is_on
         socket_on = kind == "demo_socket" and is_on
         bg = "#FEF3C7" if lamp_on else "#CCFBF1" if socket_on else c("card")
@@ -2211,8 +2345,8 @@ async def main(page: ft.Page):
         status = config["status_on"] if is_on else config["status_off"]
 
         return ft.Container(
-            width=170,
-            height=128,
+            width=200,
+            height=146,
             padding=12,
             border_radius=16,
             bgcolor=bg,
@@ -2223,13 +2357,142 @@ async def main(page: ft.Page):
                 spacing=6,
                 horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                 controls=[
-                    ft.Icon(config["icon_on"] if is_on else config["icon"], size=36, color=icon_color),
-                    T(str(device.get("name", config["title"])), weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    *visual_device_header(config, device, "icon_on" if is_on else "icon", icon_color),
                     TM(status, size=12),
-                    *( [ft.Row(alignment=ft.MainAxisAlignment.CENTER, controls=[ft.ProgressRing(width=14, height=14, stroke_width=2), TM("Отправка команды...", size=11)])] if is_pending else [] ),
+                    *([visual_pending_row("Отправка команды...")] if is_pending else []),
                 ],
             ),
         )
+
+    def render_demo_motion_sensor(device: dict[str, Any], config: dict[str, Any], is_pending: bool) -> ft.Control:
+        detected = bool(visual_sensor_state(device).get("motion"))
+        bg = "#FEF3C7" if detected else c("card")
+        icon_color = "#F59E0B" if detected else c("accent")
+
+        async def simulate_motion(_):
+            await send_visual_demo_event(
+                device,
+                "motion",
+                True,
+                "visual_demo: сымитировано движение",
+                ("motion", True),
+                "visual_demo: сымитировано движение",
+                after_success=lambda: asyncio.create_task(clear_visual_motion_later(device)),
+            )
+
+        return ft.Container(
+            width=200,
+            height=162,
+            padding=12,
+            border_radius=16,
+            bgcolor=bg,
+            border=ft.border.all(1, c("border")),
+            animate=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
+            content=ft.Column(
+                spacing=6,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    *visual_device_header(config, device, "icon_on" if detected else "icon", icon_color),
+                    TM(config["status_on"] if detected else config["status_off"], size=12),
+                    ft.OutlinedButton("Сымитировать движение", width=176, disabled=is_pending, on_click=async_click(simulate_motion)),
+                    *([visual_pending_row("Отправка события...")] if is_pending else []),
+                ],
+            ),
+        )
+
+    def render_demo_temperature_sensor(device: dict[str, Any], config: dict[str, Any], is_pending: bool) -> ft.Control:
+        current_temp = int(visual_sensor_state(device).get("temperature", config.get("default_temperature", 24)))
+
+        async def change_temperature(delta: int):
+            target = current_temp + delta
+            if target < -30 or target > 60:
+                show_message("Температура должна быть от -30 до 60 °C")
+                return
+            await send_visual_demo_event(
+                device,
+                "temperature_changed",
+                target,
+                "visual_demo: изменена температура",
+                ("temperature", target),
+                f"visual_demo: температура изменена на {target} °C",
+            )
+
+        return ft.Container(
+            width=200,
+            height=162,
+            padding=12,
+            border_radius=16,
+            bgcolor=c("card"),
+            border=ft.border.all(1, c("border")),
+            animate=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
+            content=ft.Column(
+                spacing=6,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    *visual_device_header(config, device, "icon", c("accent")),
+                    T(f"{current_temp} °C", size=20, weight=ft.FontWeight.BOLD),
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8,
+                        controls=[
+                            ft.OutlinedButton("-1 °C", disabled=is_pending, on_click=async_click(lambda e: change_temperature(-1))),
+                            ft.OutlinedButton("+1 °C", disabled=is_pending, on_click=async_click(lambda e: change_temperature(1))),
+                        ],
+                    ),
+                    *([visual_pending_row("Отправка события...")] if is_pending else []),
+                ],
+            ),
+        )
+
+    def render_demo_leak_sensor(device: dict[str, Any], config: dict[str, Any], is_pending: bool) -> ft.Control:
+        leak = bool(visual_sensor_state(device).get("leak"))
+        bg = "#FEE2E2" if leak else c("card")
+        icon_color = "#DC2626" if leak else c("accent")
+
+        async def send_leak(value: bool):
+            await send_visual_demo_event(
+                device,
+                "leak",
+                value,
+                "visual_demo: обнаружена протечка" if value else "visual_demo: протечка сброшена",
+                ("leak", value),
+                "visual_demo: обнаружена протечка" if value else "visual_demo: протечка сброшена",
+            )
+
+        return ft.Container(
+            width=200,
+            height=172,
+            padding=12,
+            border_radius=16,
+            bgcolor=bg,
+            border=ft.border.all(1, c("border")),
+            animate=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
+            content=ft.Column(
+                spacing=6,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    *visual_device_header(config, device, "icon_on" if leak else "icon", icon_color),
+                    TM(config["status_on"] if leak else config["status_off"], size=12),
+                    ft.OutlinedButton("Сымитировать протечку", width=176, disabled=is_pending or leak, on_click=async_click(lambda e: send_leak(True))),
+                    ft.TextButton("Сбросить протечку", width=176, disabled=is_pending or not leak, on_click=async_click(lambda e: send_leak(False))),
+                    *([visual_pending_row("Отправка события...")] if is_pending else []),
+                ],
+            ),
+        )
+
+    def build_visual_demo_device(device: dict[str, Any], index: int) -> ft.Control:
+        kind = demo_device_kind(device)
+        config = DEMO_DEVICE_TYPES.get(kind, DEMO_DEVICE_TYPES["demo_light"])
+        pending = state.get("visual_pending_devices")
+        is_pending = isinstance(pending, set) and int(device.get("id", 0)) in pending
+        category = str(config.get("category", "toggle"))
+        if category == "motion":
+            return render_demo_motion_sensor(device, config, is_pending)
+        if category == "temperature":
+            return render_demo_temperature_sensor(device, config, is_pending)
+        if category == "leak":
+            return render_demo_leak_sensor(device, config, is_pending)
+        return render_demo_toggle_device(device, config, is_pending)
 
     def build_visual_room_scene(room_id: str | None, devices: list[dict[str, Any]]) -> ft.Control:
         positioned = []
@@ -2238,12 +2501,12 @@ async def main(page: ft.Page):
             row = index // 3
             positioned.append(
                 ft.Container(
-                    left=28 + col * 190,
-                    top=34 + row * 148,
+                    left=28 + col * 220,
+                    top=34 + row * 184,
                     content=build_visual_demo_device(device, index),
                 )
             )
-        scene_height = max(430, 190 + ((len(devices) + 2) // 3) * 148)
+        scene_height = max(430, 190 + ((len(devices) + 2) // 3) * 184)
         scene_content = (
             ft.Stack(controls=positioned, height=scene_height)
             if positioned
@@ -2289,6 +2552,24 @@ async def main(page: ft.Page):
         is_on_sw = ft.Switch(label="Включено", value=False)
         bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название устройства", 2, 80))
 
+        def demo_connection_defaults(kind: str) -> dict[str, str]:
+            connection = {"demoType": kind}
+            if kind == "demo_motion_sensor":
+                connection["motion"] = "false"
+            if kind == "demo_temperature_sensor":
+                connection["temperature"] = str(DEMO_DEVICE_TYPES[kind].get("default_temperature", 24))
+            if kind == "demo_leak_sensor":
+                connection["leak"] = "false"
+            return connection
+
+        def sync_demo_initial_state(_=None):
+            config = DEMO_DEVICE_TYPES.get(str(type_dd.value), DEMO_DEVICE_TYPES["demo_light"])
+            is_on_sw.visible = str(config.get("category")) == "toggle"
+            page.update()
+
+        type_dd.on_change = sync_demo_initial_state
+        sync_demo_initial_state()
+
         async def save():
             try:
                 clean_name = validators.require_safe_text(name_tf.value, "Название устройства", 2, 80)
@@ -2300,7 +2581,7 @@ async def main(page: ft.Page):
                     "name": clean_name,
                     "roomId": int(clean_room_id),
                     "room": None,
-                    "isOn": bool(is_on_sw.value),
+                    "isOn": bool(is_on_sw.value) if str(config.get("category")) == "toggle" else False,
                     "type": config["device_type"],
                     "provider": "demo",
                     "protocol": "demo",
@@ -2308,7 +2589,7 @@ async def main(page: ft.Page):
                     "externalId": f"{clean_kind}-{stamp}",
                     "manufacturer": "CALHouse",
                     "model": config["model"],
-                    "connection": {"demoType": clean_kind},
+                    "connection": demo_connection_defaults(clean_kind),
                 }
                 created = await visualization_api_request("post", "/api/devices", payload)
                 if isinstance(created, dict):
@@ -2782,6 +3063,8 @@ async def main(page: ft.Page):
             state["visual_api_logs"].clear()
         if isinstance(state.get("visual_pending_devices"), set):
             state["visual_pending_devices"].clear()
+        if isinstance(state.get("visual_sensor_values"), dict):
+            state["visual_sensor_values"].clear()
         state["visual_room_id"] = None
         clear_data()
         build()
