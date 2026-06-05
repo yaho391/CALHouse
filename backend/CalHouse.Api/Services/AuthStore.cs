@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using CalHouse.Api.Infrastructure;
@@ -11,9 +12,13 @@ public sealed class AuthStore
     private const int PasswordIterations = 120_000;
     private const int SaltSize = 16;
     private const int HashSize = 32;
+    private static readonly TimeSpan SessionTouchInterval = TimeSpan.FromSeconds(60);
     private static readonly Regex LoginPattern = new(@"^[A-Za-z0-9._-]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private readonly string _databasePath;
     private readonly object _sync = new();
+    private readonly ConcurrentQueue<AuditLogItem> _auditQueue = new();
+    private readonly SemaphoreSlim _auditSignal = new(0);
+    private readonly CancellationTokenSource _auditCancellation = new();
 
     public AuthStore(IWebHostEnvironment environment)
     {
@@ -26,6 +31,8 @@ public sealed class AuthStore
             using var db = OpenConnection();
             EnsureSchema(db);
         }
+
+        _ = Task.Run(ProcessAuditQueueAsync);
     }
 
     public AuthResult Register(string login, string password, string confirmPassword)
@@ -112,13 +119,14 @@ SELECT last_insert_rowid();";
             var tokenHash = HashToken(token.Trim());
             var command = db.CreateCommand();
             command.CommandText = @"
-SELECT u.Id, u.Login, u.Role, u.IsActive
+SELECT u.Id, u.Login, u.Role, u.IsActive, s.LastSeenAt
 FROM UserSessions s
 INNER JOIN Users u ON u.Id = s.UserId
 WHERE s.TokenHash = @tokenHash AND s.ExpiresAt > @now
 LIMIT 1;";
             command.Parameters.AddWithValue("@tokenHash", tokenHash);
-            command.Parameters.AddWithValue("@now", DateTime.UtcNow.ToString("O"));
+            var now = DateTime.UtcNow;
+            command.Parameters.AddWithValue("@now", now.ToString("O"));
             using var reader = command.ExecuteReader();
             if (!reader.Read())
             {
@@ -132,17 +140,22 @@ LIMIT 1;";
                 Role = reader.GetString(2),
                 IsActive = reader.GetInt32(3) == 1,
             };
+            var rawLastSeenAt = reader.GetString(4);
             if (!user.IsActive)
             {
                 return null;
             }
 
             reader.Close();
-            var touch = db.CreateCommand();
-            touch.CommandText = "UPDATE UserSessions SET LastSeenAt = @lastSeenAt WHERE TokenHash = @tokenHash;";
-            touch.Parameters.AddWithValue("@lastSeenAt", DateTime.UtcNow.ToString("O"));
-            touch.Parameters.AddWithValue("@tokenHash", tokenHash);
-            touch.ExecuteNonQuery();
+            if (!DateTime.TryParse(rawLastSeenAt, null, System.Globalization.DateTimeStyles.RoundtripKind, out var lastSeenAt)
+                || now - lastSeenAt.ToUniversalTime() >= SessionTouchInterval)
+            {
+                var touch = db.CreateCommand();
+                touch.CommandText = "UPDATE UserSessions SET LastSeenAt = @lastSeenAt WHERE TokenHash = @tokenHash;";
+                touch.Parameters.AddWithValue("@lastSeenAt", now.ToString("O"));
+                touch.Parameters.AddWithValue("@tokenHash", tokenHash);
+                touch.ExecuteNonQuery();
+            }
             return user;
         }
     }
@@ -258,6 +271,32 @@ LIMIT 1;";
 
     public void LogAudit(string login, string method, string path)
     {
+        _auditQueue.Enqueue(new AuditLogItem(login, method, path));
+        _auditSignal.Release();
+    }
+
+    private async Task ProcessAuditQueueAsync()
+    {
+        while (!_auditCancellation.IsCancellationRequested)
+        {
+            try
+            {
+                await _auditSignal.WaitAsync(_auditCancellation.Token);
+            }
+            catch (OperationCanceledException)
+            {
+                break;
+            }
+
+            while (_auditQueue.TryDequeue(out var item))
+            {
+                WriteAuditLog(item);
+            }
+        }
+    }
+
+    private void WriteAuditLog(AuditLogItem item)
+    {
         try
         {
             lock (_sync)
@@ -265,7 +304,7 @@ LIMIT 1;";
                 using var db = OpenConnection();
                 EnsureSchema(db);
                 using var transaction = db.BeginTransaction();
-                LogEvent(db, transaction, login, "USER_API_ACTION", $"Пользователь {login} выполнил действие: {DescribeApiAction(method, path)}");
+                LogEvent(db, transaction, item.Login, "USER_API_ACTION", $"Пользователь {item.Login} выполнил действие: {DescribeApiAction(item.Method, item.Path)}");
                 transaction.Commit();
             }
         }
@@ -274,7 +313,6 @@ LIMIT 1;";
             // Audit logging must not break a successful API request.
         }
     }
-
     private SqliteConnection OpenConnection()
     {
         var connection = new SqliteConnection($"Data Source={_databasePath}");
@@ -525,6 +563,8 @@ VALUES (@ts, @severity, @source, @eventType, @message, @userId, NULL, NULL, NULL
         command.ExecuteNonQuery();
     }
 
+    private sealed record AuditLogItem(string Login, string Method, string Path);
+
     private static string DescribeApiAction(string method, string path)
     {
         var upperMethod = method.ToUpperInvariant();
@@ -547,3 +587,4 @@ VALUES (@ts, @severity, @source, @eventType, @message, @userId, NULL, NULL, NULL
         return $"{upperMethod} {path}";
     }
 }
+
