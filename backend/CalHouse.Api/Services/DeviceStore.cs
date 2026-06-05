@@ -262,13 +262,16 @@ SET IsOn = @isOn,
     ConnectionStatus = @connectionStatus,
     ConnectionMessage = @connectionMessage,
     LastConnectionCheckAt = @lastConnectionCheckAt,
+    LastSeenAt = CASE WHEN @commandOk = 1 THEN @lastSeenAt ELSE LastSeenAt END,
     UpdatedAt = @updatedAt
 WHERE Id = @id;";
             command.Parameters.AddWithValue("@id", id);
             command.Parameters.AddWithValue("@isOn", commandResult.Ok ? (nextState ? 1 : 0) : (latest.IsOn ? 1 : 0));
+            command.Parameters.AddWithValue("@commandOk", commandResult.Ok ? 1 : 0);
             command.Parameters.AddWithValue("@connectionStatus", commandResult.Status);
             command.Parameters.AddWithValue("@connectionMessage", commandResult.Message);
             command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
+            command.Parameters.AddWithValue("@lastSeenAt", now.ToString("O"));
             command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
             command.ExecuteNonQuery();
 

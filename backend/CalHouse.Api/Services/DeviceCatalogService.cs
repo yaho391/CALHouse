@@ -234,7 +234,7 @@ public sealed class DeviceCatalogService
                 Code = "light",
                 DisplayName = "Свет",
                 Capabilities = controllable,
-                AllowedProviders = ["mock", "mqtt", "zigbee2mqtt", "homeassistant", "tasmota", "shelly", "custom_http"],
+                AllowedProviders = ["mock", "demo", "mqtt", "zigbee2mqtt", "homeassistant", "tasmota", "shelly", "custom_http"],
                 OptionalFields = ["brightness_topic", "state_topic"],
                 Actions = [ToggleAction()],
                 LegacyNames = ["Свет", "РЎРІРµС‚"],
@@ -244,7 +244,7 @@ public sealed class DeviceCatalogService
                 Code = "socket",
                 DisplayName = "Розетка",
                 Capabilities = controllable,
-                AllowedProviders = ["mock", "mqtt", "zigbee2mqtt", "homeassistant", "tasmota", "shelly", "custom_http"],
+                AllowedProviders = ["mock", "demo", "mqtt", "zigbee2mqtt", "homeassistant", "tasmota", "shelly", "custom_http"],
                 Actions = [ToggleAction()],
                 LegacyNames = ["Розетка", "Р РѕР·РµС‚РєР°"],
             },
@@ -324,6 +324,18 @@ public sealed class DeviceCatalogService
                 SupportsEvents = true,
                 FormFields = [],
                 Note = "Локальный тестовый режим: сетевые параметры не нужны, команда не отправляется на реальное устройство.",
+            },
+            new()
+            {
+                Code = "demo",
+                DisplayName = "Визуализация дома",
+                Protocol = "demo",
+                Channel = "local",
+                TestMode = "local",
+                SupportsCommands = true,
+                SupportsEvents = true,
+                FormFields = [],
+                Note = "Демо-устройство для визуализации: состояние меняется локально без обращения к реальному оборудованию.",
             },
             new()
             {
