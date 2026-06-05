@@ -154,7 +154,15 @@ async def main(page: ft.Page):
     page.spacing = 0
     page.theme_mode = ft.ThemeMode.LIGHT
 
-    state = {"tab": 0, "dark": False, "token": None, "login": "", "role": ""}
+    state = {"tab": 0, "dark": False, "token": None, "login": "", "role": "", "auth_refresh_task": None}
+    api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
+
+    def close_api_client(_=None):
+        if not api_client.is_closed:
+            asyncio.create_task(api_client.aclose())
+
+    page.on_close = close_api_client
+    page.on_disconnect = close_api_client
     data: dict[str, Any] = {
         "catalog": {},
         "devices": [],
@@ -255,13 +263,11 @@ async def main(page: ft.Page):
         page.update()
 
     async def api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = API_TIMEOUT_SECONDS):
-        url = f"{API_BASE}{path}"
         try:
             headers = {}
             if state.get("token"):
                 headers["Authorization"] = f"Bearer {state['token']}"
-            async with httpx.AsyncClient(timeout=timeout) as client:
-                response = await client.request(method=method.upper(), url=url, json=payload, headers=headers)
+            response = await api_client.request(method=method.upper(), url=path, json=payload, headers=headers, timeout=timeout)
             if response.status_code >= 400:
                 try:
                     error_data = response.json()
@@ -2034,10 +2040,24 @@ async def main(page: ft.Page):
         state["login"] = result.get("login", "")
         state["role"] = result.get("role", "User")
         state["tab"] = 0
-        await refresh_all()
+        clear_data()
         build()
 
+        async def load_after_auth(expected_token: str | None):
+            await refresh_all()
+            if state.get("token") == expected_token:
+                build()
+
+        previous_task = state.get("auth_refresh_task")
+        if isinstance(previous_task, asyncio.Task) and not previous_task.done():
+            previous_task.cancel()
+        state["auth_refresh_task"] = asyncio.create_task(load_after_auth(state.get("token")))
+
     def logout():
+        previous_task = state.get("auth_refresh_task")
+        if isinstance(previous_task, asyncio.Task) and not previous_task.done():
+            previous_task.cancel()
+        state["auth_refresh_task"] = None
         state["token"] = None
         state["login"] = ""
         state["role"] = ""
