@@ -13,8 +13,8 @@ namespace CalHouse.Api.Services;
 public partial class DeviceStore
 {
     private static readonly string[] SupportedDeviceTypes = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Замок", "Штора", "Другое"];
-    private static readonly string[] SupportedProviders = ["mock", "shelly", "tasmota", "mqtt", "zigbee2mqtt", "homeassistant", "http", "camera", "custom"];
-    private static readonly string[] SupportedProtocols = ["manual", "http", "https", "mqtt", "tcp", "rtsp"];
+    private static readonly string[] SupportedProviders = ["mock", "demo", "shelly", "tasmota", "mqtt", "zigbee2mqtt", "homeassistant", "http", "camera", "custom"];
+    private static readonly string[] SupportedProtocols = ["manual", "demo", "http", "https", "mqtt", "tcp", "rtsp"];
     private static readonly string[] SupportedRuleOperators = ["=", "!=", ">", ">=", "<", "<=", "contains"];
     private static readonly string[] SupportedActionKinds = ["device_state", "scene_run"];
     private static readonly string[] BooleanEventTypes = ["motion", "smoke", "water_leak", "door_open", "online", "offline"];
@@ -666,7 +666,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         provider = _catalog.NormalizeProviderCode(provider);
         protocol = NormalizeProtocol(NormalizeOptional(protocol, _catalog.InferProtocol(provider)));
 
-        if (provider == "mock" || protocol == "manual")
+        if (provider is "mock" or "demo" || protocol is "manual" or "demo")
         {
             return new ConnectionValidationResult(true, "connected", "Локальное устройство не требует сетевой проверки", connection);
         }
@@ -694,7 +694,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         provider = _catalog.NormalizeProviderCode(provider);
         protocol = NormalizeProtocol(NormalizeOptional(protocol, _catalog.InferProtocol(provider)));
 
-        if (provider == "mock" || protocol == "manual")
+        if (provider is "mock" or "demo" || protocol is "manual" or "demo")
         {
             return new ConnectionValidationResult(true, "connected", "Локальное устройство не требует сетевой проверки", connection);
         }
@@ -1010,7 +1010,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             return ExecuteCustomHttpCommand(device, protocol, targetIsOn);
         }
 
-        if (provider == "mock" || protocol == "manual")
+        if (provider is "mock" or "demo" || protocol is "manual" or "demo")
         {
             return new DeviceCommandResult(true, "connected", "Локальное устройство переключено без сетевой команды");
         }
@@ -1242,6 +1242,7 @@ WHERE Id = @id;";
     {
         return NormalizeOptional(provider, "mock").Trim().ToLowerInvariant() switch
         {
+            "demo" => "demo",
             "shelly" or "tasmota" or "homeassistant" or "http" or "custom_http" => "http",
             "mqtt" or "zigbee2mqtt" => "mqtt",
             "camera" or "camera_rtsp" => "rtsp",
@@ -1255,6 +1256,7 @@ WHERE Id = @id;";
         return NormalizeOptional(protocol, "manual").Trim().ToLowerInvariant() switch
         {
             "http" or "https" => "wifi",
+            "demo" => "local",
             "mqtt" => "mqtt",
             "rtsp" => "lan",
             "tcp" => "lan",

@@ -10,6 +10,19 @@ public partial class DeviceStore
     {
         ArgumentNullException.ThrowIfNull(queue);
 
+        var executeImmediately = false;
+        lock (_sync)
+        {
+            using var db = OpenConnection();
+            var current = ReadDeviceOrThrow(db, id);
+            executeImmediately = IsImmediateLocalDevice(current);
+        }
+
+        if (executeImmediately)
+        {
+            return ToggleDevice(id);
+        }
+
         bool targetIsOn;
         Device queuedDevice;
         lock (_sync)
@@ -42,6 +55,13 @@ public partial class DeviceStore
         });
 
         return queuedDevice;
+    }
+
+    private bool IsImmediateLocalDevice(Device device)
+    {
+        var provider = _catalog.NormalizeProviderCode(device.Provider);
+        var protocol = NormalizeOptional(device.Protocol, _catalog.InferProtocol(provider)).ToLowerInvariant();
+        return provider == "demo" || protocol == "demo";
     }
 
     public SceneRun QueueSceneRun(int id, DeviceCommandQueue queue)

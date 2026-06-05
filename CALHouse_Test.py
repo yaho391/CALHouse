@@ -2,7 +2,9 @@
 import flet as ft
 import asyncio
 import httpx
+import json
 from datetime import datetime
+from time import perf_counter
 from typing import Any
 import validation as validators
 
@@ -15,6 +17,7 @@ LIST_PAGE_SIZE = 25
 REFRESH_DEBOUNCE_SECONDS = 0.35
 TAB_FADE_MS = 180
 CARD_REVEAL_MS = 170
+VISUAL_API_LOG_LIMIT = 8
 
 LIGHT_BG = "#E6F0FF"
 DARK_BG = "#0D1B2A"
@@ -85,6 +88,27 @@ STATUS_COLORS = {
     "warning": ("#FEF3C7", "#92400E"),
     "disabled": ("#E2E8F0", "#475569"),
     "unknown": ("#E2E8F0", "#475569"),
+}
+
+DEMO_DEVICE_TYPES = {
+    "demo_light": {
+        "title": "Лампа",
+        "device_type": "light",
+        "icon": ft.Icons.LIGHTBULB_OUTLINE,
+        "icon_on": ft.Icons.LIGHTBULB,
+        "status_on": "включена",
+        "status_off": "выключена",
+        "model": "Demo Light",
+    },
+    "demo_socket": {
+        "title": "Розетка",
+        "device_type": "socket",
+        "icon": ft.Icons.OUTLET,
+        "icon_on": ft.Icons.ELECTRICAL_SERVICES,
+        "status_on": "включена",
+        "status_off": "выключена",
+        "model": "Demo Socket",
+    },
 }
 
 DEFAULT_DEVICE_TYPES = [
@@ -204,6 +228,9 @@ async def main(page: ft.Page):
         "last_refresh_started": {},
         "visible_limits": {"devices": INITIAL_LIST_LIMIT, "rules": INITIAL_LIST_LIMIT, "logs": INITIAL_LIST_LIMIT},
         "pending_card_reveals": [],
+        "visual_room_id": None,
+        "visual_api_logs": [],
+        "visual_pending_devices": set(),
     }
     api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
 
@@ -452,6 +479,65 @@ async def main(page: ft.Page):
         except httpx.RequestError as ex:
             raise RuntimeError(f"API недоступен: {ex}") from ex
 
+    def visual_api_body_text(payload: dict[str, Any] | None) -> str:
+        if payload is None:
+            return ""
+        return json.dumps(payload, ensure_ascii=False, indent=2)
+
+    def add_visual_api_log(entry: dict[str, Any]):
+        logs = state.get("visual_api_logs")
+        if not isinstance(logs, list):
+            logs = []
+            state["visual_api_logs"] = logs
+        logs.insert(0, entry)
+        del logs[VISUAL_API_LOG_LIMIT:]
+
+    async def visualization_api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = API_TIMEOUT_SECONDS):
+        started_at = perf_counter()
+        status: int | str = "error"
+        error_text = ""
+        try:
+            headers = {}
+            if state.get("token"):
+                headers["Authorization"] = f"Bearer {state['token']}"
+            response = await api_client.request(method=method.upper(), url=path, json=payload, headers=headers, timeout=timeout)
+            status = response.status_code
+            if response.status_code >= 400:
+                try:
+                    error_data = response.json()
+                except Exception:
+                    error_data = {}
+                message = error_data.get("message") or error_data.get("error") or f"HTTP {response.status_code}"
+                message = api_error_message(path, response.status_code, error_data, message)
+                if response.status_code == 400:
+                    message = invalid_input_message(message)
+                error_text = message
+                raise RuntimeError(message)
+            if not response.text:
+                return None
+            return response.json()
+        except httpx.TimeoutException as ex:
+            status = "timeout"
+            error_text = "Сервер долго не отвечает или устройство не ответило"
+            raise RuntimeError(error_text) from ex
+        except httpx.RequestError as ex:
+            status = "error"
+            error_text = f"API недоступен: {ex}"
+            raise RuntimeError(error_text) from ex
+        finally:
+            elapsed_ms = int((perf_counter() - started_at) * 1000)
+            add_visual_api_log(
+                {
+                    "time": datetime.now().strftime("%H:%M:%S"),
+                    "method": method.upper(),
+                    "path": path,
+                    "body": visual_api_body_text(payload),
+                    "status": status,
+                    "durationMs": elapsed_ms,
+                    "error": error_text,
+                }
+            )
+
     def require_text(value: Any, label: str, max_length: int = 80) -> str:
         return validators.require_safe_text(value, label, 2, max_length)
 
@@ -662,8 +748,9 @@ async def main(page: ft.Page):
             3: ("scenes", "logs"),
             4: ("rules", "logs"),
             5: ("schedules", "logs"),
-            6: ("logs",),
-            7: ("users",),
+            6: ("rooms", "devices"),
+            7: ("logs",),
+            8: ("users",),
         }
         return sections_by_tab.get(int(state.get("tab", 0) or 0), ("devices", "rooms", "logs"))
 
@@ -1981,6 +2068,313 @@ async def main(page: ft.Page):
         )
         show_dialog(dialog)
 
+    def visual_selected_room_id() -> str | None:
+        rooms = data["rooms"]
+        if not rooms:
+            state["visual_room_id"] = None
+            return None
+        available = {str(room.get("id")) for room in rooms}
+        selected = str(state.get("visual_room_id") or "")
+        if selected not in available:
+            selected = str(rooms[0].get("id"))
+            state["visual_room_id"] = selected
+        return selected
+
+    def is_demo_device(device: dict[str, Any]) -> bool:
+        connection = device.get("connection") or {}
+        return (
+            str(device.get("provider", "")).lower() == "demo"
+            or str(device.get("protocol", "")).lower() == "demo"
+            or str(connection.get("demoType", "")) in DEMO_DEVICE_TYPES
+        )
+
+    def demo_device_kind(device: dict[str, Any]) -> str:
+        connection = device.get("connection") or {}
+        kind = str(connection.get("demoType") or "")
+        if kind in DEMO_DEVICE_TYPES:
+            return kind
+        if device_type_code(device.get("type")) == "socket":
+            return "demo_socket"
+        return "demo_light"
+
+    def visual_room_demo_devices(room_id: str | None) -> list[dict[str, Any]]:
+        if not room_id:
+            return []
+        return [
+            device
+            for device in data["devices"]
+            if str(device.get("roomId")) == str(room_id) and is_demo_device(device)
+        ]
+
+    def merge_device_snapshot(updated: dict[str, Any]):
+        updated_id = updated.get("id")
+        for index, device in enumerate(data["devices"]):
+            if device.get("id") == updated_id:
+                data["devices"][index] = updated
+                return
+        data["devices"].append(updated)
+
+    def visual_status_color(status: Any):
+        raw = str(status)
+        if raw.isdigit() and 200 <= int(raw) < 300:
+            return "connected"
+        if raw == "timeout":
+            return "warning"
+        return "no_connection"
+
+    def build_visual_api_monitor() -> ft.Control:
+        logs = state.get("visual_api_logs")
+        entries = logs if isinstance(logs, list) else []
+        entry_controls = []
+        for entry in entries:
+            body = str(entry.get("body") or "")
+            error = str(entry.get("error") or "")
+            entry_controls.append(
+                ft.Container(
+                    padding=10,
+                    border_radius=12,
+                    bgcolor=c("field"),
+                    border=ft.border.all(1, c("border")),
+                    content=ft.Column(
+                        spacing=6,
+                        controls=[
+                            ft.Row(
+                                alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                                controls=[
+                                    T(f"{entry.get('method')} {entry.get('path')}", weight=ft.FontWeight.BOLD, size=12),
+                                    status_chip(str(entry.get("status")), visual_status_color(entry.get("status"))),
+                                ],
+                            ),
+                            TM(f"{entry.get('time')} · {entry.get('durationMs')} мс", size=12),
+                            *([TM(f"Body: {body}", size=11)] if body else []),
+                            *([ft.Text(error, color="#DC2626", size=11)] if error else []),
+                        ],
+                    ),
+                )
+            )
+
+        return ft.Container(
+            width=390,
+            padding=14,
+            bgcolor=c("card"),
+            border_radius=16,
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(
+                spacing=10,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            T("API-монитор", weight=ft.FontWeight.BOLD),
+                            ft.Icon(ft.Icons.API, color=c("accent")),
+                        ],
+                    ),
+                    TM("Только запросы из визуализации", size=12),
+                    *(entry_controls or [TM("Запросов из визуализации пока нет", size=12)]),
+                ],
+            ),
+        )
+
+    async def toggle_visual_demo_device(device: dict[str, Any]):
+        device_id = int(device.get("id", 0))
+        if not device_id:
+            return
+        pending = state.get("visual_pending_devices")
+        if not isinstance(pending, set):
+            pending = set()
+            state["visual_pending_devices"] = pending
+        if device_id in pending:
+            return
+        pending.add(device_id)
+        render_current_view()
+        try:
+            updated = await visualization_api_request("put", f"/api/devices/{device_id}/toggle")
+            if isinstance(updated, dict):
+                merge_device_snapshot(updated)
+            await refresh_sections("devices", "logs")
+        except Exception as ex:
+            show_message(f"Не удалось изменить состояние устройства: {error_message(ex)}")
+        finally:
+            pending.discard(device_id)
+            render_current_view()
+
+    def build_visual_demo_device(device: dict[str, Any], index: int) -> ft.Control:
+        kind = demo_device_kind(device)
+        config = DEMO_DEVICE_TYPES.get(kind, DEMO_DEVICE_TYPES["demo_light"])
+        is_on = bool(device.get("isOn"))
+        pending = state.get("visual_pending_devices")
+        is_pending = isinstance(pending, set) and int(device.get("id", 0)) in pending
+        lamp_on = kind == "demo_light" and is_on
+        socket_on = kind == "demo_socket" and is_on
+        bg = "#FEF3C7" if lamp_on else "#CCFBF1" if socket_on else c("card")
+        icon_color = "#F59E0B" if lamp_on else c("accent") if socket_on else c("muted")
+        status = config["status_on"] if is_on else config["status_off"]
+
+        return ft.Container(
+            width=170,
+            height=128,
+            padding=12,
+            border_radius=16,
+            bgcolor=bg,
+            border=ft.border.all(1, c("border")),
+            animate=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
+            on_click=async_click(lambda e, d=device: toggle_visual_demo_device(d)) if not is_pending else None,
+            content=ft.Column(
+                spacing=6,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(config["icon_on"] if is_on else config["icon"], size=36, color=icon_color),
+                    T(str(device.get("name", config["title"])), weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    TM(status, size=12),
+                    *( [ft.Row(alignment=ft.MainAxisAlignment.CENTER, controls=[ft.ProgressRing(width=14, height=14, stroke_width=2), TM("Отправка команды...", size=11)])] if is_pending else [] ),
+                ],
+            ),
+        )
+
+    def build_visual_room_scene(room_id: str | None, devices: list[dict[str, Any]]) -> ft.Control:
+        positioned = []
+        for index, device in enumerate(devices):
+            col = index % 3
+            row = index // 3
+            positioned.append(
+                ft.Container(
+                    left=28 + col * 190,
+                    top=34 + row * 148,
+                    content=build_visual_demo_device(device, index),
+                )
+            )
+        scene_height = max(430, 190 + ((len(devices) + 2) // 3) * 148)
+        scene_content = (
+            ft.Stack(controls=positioned, height=scene_height)
+            if positioned
+            else ft.Container(
+                height=scene_height,
+                alignment=ft.Alignment(0, 0),
+                content=TM("В этой комнате пока нет демо-устройств."),
+            )
+        )
+        return ft.Container(
+            expand=True,
+            padding=16,
+            border_radius=18,
+            bgcolor=c("field"),
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(
+                spacing=10,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            T("Комната", weight=ft.FontWeight.BOLD),
+                            TM(f"Демо-устройств: {len(devices)}", size=12),
+                        ],
+                    ),
+                    scene_content,
+                ],
+            ),
+        )
+
+    def open_visual_demo_device_dialog():
+        if not data["rooms"]:
+            show_message("Сначала создай комнату")
+            return
+        selected_room = visual_selected_room_id()
+        name_tf = field(label="Название устройства", hint_text="Например: Демо лампа")
+        type_dd = dropdown(
+            label="Тип устройства",
+            value="demo_light",
+            options=[ft.dropdown.Option(key, str(config["title"])) for key, config in DEMO_DEVICE_TYPES.items()],
+        )
+        room_dd = dropdown(label="Комната", value=selected_room, options=room_options())
+        is_on_sw = ft.Switch(label="Включено", value=False)
+        bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название устройства", 2, 80))
+
+        async def save():
+            try:
+                clean_name = validators.require_safe_text(name_tf.value, "Название устройства", 2, 80)
+                clean_kind = require_selected(type_dd.value, "Тип устройства", set(DEMO_DEVICE_TYPES.keys()))
+                clean_room_id = require_selected(room_dd.value, "Комната", {str(room.get("id")) for room in data["rooms"]})
+                config = DEMO_DEVICE_TYPES[clean_kind]
+                stamp = int(datetime.now().timestamp() * 1000)
+                payload = {
+                    "name": clean_name,
+                    "roomId": int(clean_room_id),
+                    "room": None,
+                    "isOn": bool(is_on_sw.value),
+                    "type": config["device_type"],
+                    "provider": "demo",
+                    "protocol": "demo",
+                    "channel": "local",
+                    "externalId": f"{clean_kind}-{stamp}",
+                    "manufacturer": "CALHouse",
+                    "model": config["model"],
+                    "connection": {"demoType": clean_kind},
+                }
+                created = await visualization_api_request("post", "/api/devices", payload)
+                if isinstance(created, dict):
+                    merge_device_snapshot(created)
+                state["visual_room_id"] = str(clean_room_id)
+                close_dialog(dialog)
+                await refresh_sections("devices", "logs")
+                render_current_view()
+                show_message("Демо-устройство добавлено")
+            except Exception as ex:
+                render_current_view()
+                show_message(error_message(ex))
+
+        dialog = ft.AlertDialog(
+            modal=True,
+            title=T("Добавить демо-устройство", weight=ft.FontWeight.BOLD),
+            content=ft.Container(
+                width=520,
+                content=ft.Column(
+                    tight=True,
+                    spacing=10,
+                    controls=[name_tf, type_dd, room_dd, is_on_sw],
+                ),
+            ),
+            actions=[
+                ft.TextButton("Отмена", on_click=lambda e: close_dialog(dialog)),
+                ft.ElevatedButton("Добавить", icon=ft.Icons.ADD, on_click=async_click(lambda e: run_button_action(e, save))),
+            ],
+        )
+        show_dialog(dialog)
+
+    def visualization_view() -> ft.Control:
+        selected_room = visual_selected_room_id()
+        room_dd = dropdown(label="Комната", value=selected_room, options=room_options(), width=280)
+
+        def on_room_change(e):
+            state["visual_room_id"] = e.control.value
+            render_current_view()
+
+        room_dd.on_change = on_room_change
+        demo_devices = visual_room_demo_devices(selected_room)
+        loading = loading_banner("rooms", "devices")
+        return ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            spacing=14,
+            controls=[
+                ft.Row(
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    controls=[
+                        ft.Column(spacing=4, controls=[T("Визуализация дома", size=22, weight=ft.FontWeight.BOLD), TM("Интерактивная демо-комната с реальными backend endpointами")]),
+                        ft.Row(spacing=10, controls=[room_dd, ft.ElevatedButton("Добавить демо-устройство", icon=ft.Icons.ADD_HOME, visible=is_admin(), on_click=lambda e: open_visual_demo_device_dialog())]),
+                    ],
+                ),
+                *([loading] if loading else []),
+                ft.Row(
+                    spacing=14,
+                    vertical_alignment=ft.CrossAxisAlignment.START,
+                    controls=[
+                        build_visual_room_scene(selected_room, demo_devices),
+                        build_visual_api_monitor(),
+                    ],
+                ),
+                *([] if is_admin() else [TM("Добавление демо-устройств доступно администратору.", size=12)]),
+            ],
+        )
+
     def home_view() -> ft.Control:
         recent_logs = data["logs"][:6]
         log_controls = [
@@ -2042,7 +2436,7 @@ async def main(page: ft.Page):
                     controls=[
                         stat_card("Правила", str(len(data["rules"])), ft.Icons.RULE, 4),
                         stat_card("Расписания", str(len(data["schedules"])), ft.Icons.SCHEDULE, 5),
-                        stat_card("Логи", str(len(data["logs"])), ft.Icons.HISTORY, 6),
+                        stat_card("Логи", str(len(data["logs"])), ft.Icons.HISTORY, 7),
                     ],
                 ),
                 T("Последние события", size=18, weight=ft.FontWeight.BOLD),
@@ -2384,6 +2778,11 @@ async def main(page: ft.Page):
             state["loading_sections"].clear()
         if isinstance(state.get("refreshing_keys"), set):
             state["refreshing_keys"].clear()
+        if isinstance(state.get("visual_api_logs"), list):
+            state["visual_api_logs"].clear()
+        if isinstance(state.get("visual_pending_devices"), set):
+            state["visual_pending_devices"].clear()
+        state["visual_room_id"] = None
         clear_data()
         build()
         show_message("Выход выполнен")
@@ -2796,6 +3195,7 @@ async def main(page: ft.Page):
             ft.NavigationBarDestination(icon=ft.Icons.AUTO_AWESOME, selected_icon=ft.Icons.AUTO_AWESOME, label="Сценарии"),
             ft.NavigationBarDestination(icon=ft.Icons.RULE, selected_icon=ft.Icons.RULE, label="Правила"),
             ft.NavigationBarDestination(icon=ft.Icons.SCHEDULE, selected_icon=ft.Icons.SCHEDULE, label="Расписание"),
+            ft.NavigationBarDestination(icon=ft.Icons.HOME_WORK_OUTLINED, selected_icon=ft.Icons.ADD_HOME, label="Визуализация"),
             ft.NavigationBarDestination(icon=ft.Icons.HISTORY_OUTLINED, selected_icon=ft.Icons.HISTORY, label="История"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Настройки"),
         ],
@@ -2815,8 +3215,9 @@ async def main(page: ft.Page):
             3: scenes_view,
             4: rules_view,
             5: schedules_view,
-            6: history_view,
-            7: settings_view,
+            6: visualization_view,
+            7: history_view,
+            8: settings_view,
         }
         return views.get(state["tab"], home_view)()
 
