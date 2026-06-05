@@ -1729,12 +1729,6 @@ async def main(page: ft.Page):
                                 spacing=10,
                                 controls=[
                                     ft.ElevatedButton("Добавить устройство", icon=ft.Icons.ADD, visible=is_admin(), on_click=async_click(lambda e: run_button_action(e, lambda: open_device_dialog()))),
-                                    ft.OutlinedButton(
-                                        "Отправить событие",
-                                        icon=ft.Icons.SENSORS,
-                                        style=ft.ButtonStyle(color=c("hero_text")),
-                                        on_click=lambda e: open_event_dialog(),
-                                    ),
                                 ],
                             ),
                         ],
@@ -1954,7 +1948,7 @@ async def main(page: ft.Page):
                     TM(action_text, size=12),
                     TM(f"Последнее срабатывание: {fmt_dt(rule.get('lastTriggeredAt'))}", size=12),
                     TM(rule.get("lastTriggerMessage") or "", size=12),
-                    ft.Row(spacing=10, controls=[ft.ElevatedButton("Включить" if not rule.get("isEnabled") else "Выключить", visible=is_admin(), icon=ft.Icons.TOGGLE_ON if rule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, rid=rule["id"], enabled=not bool(rule.get("isEnabled")): run_button_action(e, lambda: set_rule_enabled(int(rid), enabled)))), ft.OutlinedButton("Тест событием", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog())]),
+                    ft.Row(visible=is_admin(), spacing=10, controls=[ft.ElevatedButton("Включить" if not rule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if rule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, rid=rule["id"], enabled=not bool(rule.get("isEnabled")): run_button_action(e, lambda: set_rule_enabled(int(rid), enabled))))]),
                 )
             )
 
@@ -1966,7 +1960,7 @@ async def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Правила", size=22, weight=ft.FontWeight.BOLD), TM("Если событие датчика подходит под условие, выполняется действие или сценарий")]),
-                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog())] if is_admin() else []) + [ft.OutlinedButton("Отправить событие", icon=ft.Icons.SENSORS, on_click=lambda e: open_event_dialog()), ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rules", show_toast=True))))]),
+                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать правило", icon=ft.Icons.ADD, on_click=lambda e: open_rule_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("rules", show_toast=True))))]),
                     ],
                 ),
                 *(rule_cards or [card(TM("Правил пока нет"))]),
@@ -1992,7 +1986,7 @@ async def main(page: ft.Page):
                     TM(action_text, size=12),
                     TM(f"Последний запуск: {fmt_dt(schedule.get('lastRunAt'))}", size=12),
                     TM(schedule.get("lastRunMessage") or "", size=12),
-                    ft.Row(visible=is_admin(), spacing=10, controls=[ft.ElevatedButton("Включить" if not schedule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if schedule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, sid=schedule["id"], enabled=not bool(schedule.get("isEnabled")): run_button_action(e, lambda: set_schedule_enabled(int(sid), enabled)))), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules)))]),
+                    ft.Row(visible=is_admin(), spacing=10, controls=[ft.ElevatedButton("Включить" if not schedule.get("isEnabled") else "Выключить", icon=ft.Icons.TOGGLE_ON if schedule.get("isEnabled") else ft.Icons.TOGGLE_OFF, on_click=async_click(lambda e, sid=schedule["id"], enabled=not bool(schedule.get("isEnabled")): run_button_action(e, lambda: set_schedule_enabled(int(sid), enabled))))]),
                 )
             )
 
@@ -2004,7 +1998,7 @@ async def main(page: ft.Page):
                     alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                     controls=[
                         ft.Column(spacing=4, controls=[T("Расписание", size=22, weight=ft.FontWeight.BOLD), TM("Автоматический запуск действий и сценариев по времени")]),
-                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog()), ft.OutlinedButton("Проверить сейчас", icon=ft.Icons.SCHEDULE, on_click=async_click(lambda e: run_button_action(e, run_due_schedules)))] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("schedules", show_toast=True))))]),
+                        ft.Row(spacing=10, controls=([ft.ElevatedButton("Создать расписание", icon=ft.Icons.ADD, on_click=lambda e: open_schedule_dialog())] if is_admin() else []) + [ft.OutlinedButton("Обновить", icon=ft.Icons.REFRESH, on_click=async_click(lambda e: run_button_action(e, lambda: refresh_and_build("schedules", show_toast=True))))]),
                     ],
                 ),
                 *(schedule_cards or [card(TM("Расписаний пока нет"))]),
