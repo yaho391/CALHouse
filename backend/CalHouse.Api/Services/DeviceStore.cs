@@ -101,7 +101,7 @@ public partial class DeviceStore
         var cleanManufacturer = NormalizeSafeTextOptional(manufacturer, "Производитель", 2, MaxManufacturerLength, "DEVICE_MANUFACTURER_INVALID");
         var cleanModel = NormalizeSafeTextOptional(model, "Модель", 1, MaxModelLength, "DEVICE_MODEL_INVALID");
         var connectionData = NormalizeConnection(connection);
-        var connectionCheck = ValidateConnectionInternal(cleanProvider, cleanProtocol, connectionData);
+        var connectionCheck = ValidateConnectionForSave(cleanProvider, cleanProtocol, connectionData);
 
         lock (_sync)
         {
@@ -130,7 +130,7 @@ SELECT last_insert_rowid();";
             command.Parameters.AddWithValue("@connectionJson", JsonSerializer.Serialize(connectionData, _jsonOptions));
             command.Parameters.AddWithValue("@connectionStatus", connectionCheck.Status);
             command.Parameters.AddWithValue("@connectionMessage", connectionCheck.Message);
-            command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
+            command.Parameters.AddWithValue("@lastConnectionCheckAt", DBNull.Value);
             command.Parameters.AddWithValue("@createdAt", now.ToString("O"));
             command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
             var insertedId = Convert.ToInt32((long)(command.ExecuteScalar() ?? 0));
@@ -176,7 +176,15 @@ SELECT last_insert_rowid();";
             var finalIsOn = isOn ?? current.IsOn;
             var now = DateTime.UtcNow;
             EnsureDeviceExternalIdIsUnique(db, finalExternalId, id);
-            var connectionCheck = ValidateConnectionInternal(finalProvider, finalProtocol, finalConnection);
+            var connectionChanged =
+                connection is not null
+                || !string.Equals(finalProvider, current.Provider, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(finalProtocol, current.Protocol, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(finalChannel, current.Channel, StringComparison.OrdinalIgnoreCase);
+            var connectionCheck = connectionChanged
+                ? ValidateConnectionForSave(finalProvider, finalProtocol, finalConnection)
+                : new ConnectionValidationResult(true, current.ConnectionStatus, current.ConnectionMessage, finalConnection);
+            var lastConnectionCheckAt = connectionChanged ? null : current.LastConnectionCheckAt;
 
             using var transaction = db.BeginTransaction();
             var finalRoomId = ResolveRoomId(db, transaction, roomId ?? current.RoomId, roomName, createIfMissing: !string.IsNullOrWhiteSpace(roomName));
@@ -214,7 +222,7 @@ WHERE Id = @id;";
             command.Parameters.AddWithValue("@connectionJson", JsonSerializer.Serialize(finalConnection, _jsonOptions));
             command.Parameters.AddWithValue("@connectionStatus", connectionCheck.Status);
             command.Parameters.AddWithValue("@connectionMessage", connectionCheck.Message);
-            command.Parameters.AddWithValue("@lastConnectionCheckAt", now.ToString("O"));
+            command.Parameters.AddWithValue("@lastConnectionCheckAt", (object?)lastConnectionCheckAt?.ToString("O") ?? DBNull.Value);
             command.Parameters.AddWithValue("@updatedAt", now.ToString("O"));
             command.ExecuteNonQuery();
 

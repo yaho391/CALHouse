@@ -14,41 +14,6 @@
     "connection": {}
   },
   {
-    "id": 5,
-    "name": "ertyu",
-    "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
-    "isOn": false,
-    "type": "temperature_sensor",
-    "provider": "mock",
-    "protocol": "manual",
-    "channel": "local",
-    "externalId": "",
-    "manufacturer": "",
-    "model": "",
-    "connection": {
-      "host": "192.168.1.50",
-      "port": "1883",
-      "topic": "home",
-      "state_topic": "state",
-      "username": "admin",
-      "password": "123"
-    }
-  },
-  {
-    "id": 8,
-    "name": "qwe",
-    "room": "\u0422\u0443\u0430\u043B\u0435\u0442",
-    "isOn": true,
-    "type": "light",
-    "provider": "mqtt",
-    "protocol": "manual",
-    "channel": "local",
-    "externalId": "",
-    "manufacturer": "",
-    "model": "",
-    "connection": {}
-  },
-  {
     "id": 6,
     "name": "sdfsdsdfssdf",
     "room": "\u041A\u0443\u0445\u043D\u044F",

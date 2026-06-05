@@ -105,6 +105,38 @@ DEFAULT_PROVIDERS = [
 ]
 DEFAULT_RULE_OPERATORS = ["=", "!=", ">", ">=", "<", "<=", "contains"]
 DEFAULT_ACTION_KINDS = ["device_state", "scene_run"]
+EVENT_TYPE_CODES = [
+    "motion",
+    "temperature",
+    "humidity",
+    "smoke",
+    "water_leak",
+    "door_open",
+    "battery",
+    "power",
+    "online",
+    "offline",
+    "button_click",
+    "state",
+]
+EVENT_TYPE_LABELS = {
+    "motion": "motion - движение",
+    "temperature": "temperature - температура",
+    "humidity": "humidity - влажность",
+    "smoke": "smoke - дым",
+    "water_leak": "water_leak - протечка",
+    "door_open": "door_open - дверь",
+    "battery": "battery - батарея",
+    "power": "power - питание",
+    "online": "online - онлайн",
+    "offline": "offline - офлайн",
+    "button_click": "button_click - кнопка",
+    "state": "state - состояние",
+}
+EVENT_TYPES_BY_DEVICE_TYPE = {
+    "motion_sensor": {"motion", "battery", "online", "offline"},
+    "temperature_sensor": {"temperature", "humidity", "battery", "online", "offline"},
+}
 DEFAULT_SCHEDULE_DAYS = [
     {"value": 1, "title": "Пн"},
     {"value": 2, "title": "Вт"},
@@ -722,6 +754,29 @@ async def main(page: ft.Page):
         except (TypeError, ValueError):
             return None
         return next((item for item in data["devices"] if int(item.get("id", 0)) == target_id), None)
+
+    def event_type_options() -> list[ft.dropdown.Option]:
+        allowed = validators.ALLOWED_EVENTS
+        return [ft.dropdown.Option(code, EVENT_TYPE_LABELS.get(code, code)) for code in EVENT_TYPE_CODES if code in allowed]
+
+    def allowed_events_for_device(device: dict[str, Any]) -> set[str]:
+        if not device_type_capabilities(device.get("type")).get("canEmitEvents", True):
+            return set()
+        type_code = device_type_code(device.get("type"))
+        return set(EVENT_TYPES_BY_DEVICE_TYPE.get(type_code, validators.ALLOWED_EVENTS))
+
+    def validate_rule_event_compatibility(device_id: Any, event_type: Any) -> str:
+        event = validators.validate_event_type(event_type)
+        device = find_device_by_id(device_id)
+        if device is None:
+            raise ValueError("Датчик / источник: устройство не найдено")
+        allowed = allowed_events_for_device(device)
+        if not allowed:
+            raise ValueError("Датчик / источник: выбранное устройство не отправляет события")
+        if event not in allowed:
+            available = ", ".join(code for code in EVENT_TYPE_CODES if code in allowed)
+            raise ValueError(f"Событие {event} недоступно для выбранного устройства. Доступно: {available}")
+        return event
 
     def schedule_days_title(days: list[int] | None) -> str:
         days = days or []
@@ -1419,7 +1474,7 @@ async def main(page: ft.Page):
         description_tf = field(label="Описание", value=(rule or {}).get("description", ""), multiline=True, min_lines=2, max_lines=3)
         enabled_sw = ft.Switch(label="Правило активно", value=bool((rule or {}).get("isEnabled", True)))
         trigger_device_dd = dropdown(label="Датчик / источник", value=str(rule.get("triggerDeviceId")) if editing and rule.get("triggerDeviceId") is not None else None, options=device_options(sensor_first=True))
-        event_type_tf = field(label="Тип события", value=(rule or {}).get("triggerEventType", "motion"), hint_text="Например: motion, temperature, state")
+        event_type_dd = dropdown(label="Тип события", value=(rule or {}).get("triggerEventType", "motion"), options=event_type_options())
         operator_dd = dropdown(label="Оператор", value=(rule or {}).get("comparisonOperator", "="), options=[ft.dropdown.Option(x) for x in rule_operators()])
         compare_tf = field(label="Сравнить с", value=(rule or {}).get("compareValue", "true"), hint_text="Например: true, 25, open")
         action_kind_dd = dropdown(label="Тип действия", value=(rule or {}).get("actionKind", "device_state"), options=[ft.dropdown.Option(x, action_kind_title(x)) for x in action_kinds()])
@@ -1430,10 +1485,43 @@ async def main(page: ft.Page):
             options=[ft.dropdown.Option("on", "Включить"), ft.dropdown.Option("off", "Выключить")],
         )
         action_scene_dd = dropdown(label="Или сценарий", value=str(rule.get("actionSceneId")) if editing and rule.get("actionSceneId") is not None else None, options=scene_options())
+        rule_status_text = TM("", size=12, color=c("warning_text"))
+        rule_status_text.visible = False
         bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название правила", 3, 80))
         bind_live_validator(description_tf, lambda value: validators.optional_free_text(value, "Описание правила", 500))
-        bind_live_validator(event_type_tf, validators.validate_event_type)
-        bind_live_validator(compare_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Сравнить с"))
+        bind_live_validator(compare_tf, lambda value: validators.validate_event_value(event_type_dd.value, value, "Сравнить с"))
+
+        def update_rule_event_status():
+            message = ""
+            if trigger_device_dd.value and event_type_dd.value:
+                try:
+                    validate_rule_event_compatibility(trigger_device_dd.value, event_type_dd.value)
+                    set_control_error(event_type_dd, None)
+                except Exception as ex:
+                    message = error_message(ex)
+                    set_control_error(event_type_dd, message)
+            else:
+                set_control_error(event_type_dd, None)
+            rule_status_text.value = message
+            rule_status_text.visible = bool(message)
+            for control in (event_type_dd, rule_status_text):
+                try:
+                    if getattr(control, "page", None):
+                        control.update()
+                except Exception:
+                    pass
+
+        def on_rule_event_change(_):
+            validate_control(event_type_dd, validators.validate_event_type)
+            validate_control(compare_tf, lambda value: validators.validate_event_value(event_type_dd.value, value, "Сравнить с"))
+            update_rule_event_status()
+
+        def on_rule_source_change(_):
+            update_rule_event_status()
+
+        event_type_dd.on_change = on_rule_event_change
+        trigger_device_dd.on_change = on_rule_source_change
+        update_rule_event_status()
 
         async def save():
             try:
@@ -1442,7 +1530,7 @@ async def main(page: ft.Page):
                     "description": (description_tf.value or "").strip(),
                     "isEnabled": bool(enabled_sw.value),
                     "triggerDeviceId": int(trigger_device_dd.value or 0),
-                    "eventType": (event_type_tf.value or "").strip(),
+                    "eventType": (event_type_dd.value or "").strip(),
                     "comparisonOperator": operator_dd.value or "=",
                     "compareValue": (compare_tf.value or "").strip(),
                     "actionKind": action_kind_dd.value or "device_state",
@@ -1454,8 +1542,8 @@ async def main(page: ft.Page):
                     [
                         (name_tf, lambda value: validators.require_safe_text(value, "Название правила", 3, 80)),
                         (description_tf, lambda value: validators.optional_free_text(value, "Описание правила", 500)),
-                        (event_type_tf, validators.validate_event_type),
-                        (compare_tf, lambda value: validators.validate_event_value(event_type_tf.value, value, "Сравнить с")),
+                        (event_type_dd, validators.validate_event_type),
+                        (compare_tf, lambda value: validators.validate_event_value(event_type_dd.value, value, "Сравнить с")),
                     ]
                 )
                 if not payload["triggerDeviceId"]:
@@ -1465,7 +1553,7 @@ async def main(page: ft.Page):
                     raise ValueError("Датчик / источник: устройство не найдено")
                 if not device_type_capabilities(source_device.get("type")).get("canEmitEvents", True):
                     raise ValueError("Датчик / источник: выбранное устройство не отправляет события")
-                validators.validate_event_type(payload["eventType"])
+                validate_rule_event_compatibility(payload["triggerDeviceId"], payload["eventType"])
                 require_selected(payload["comparisonOperator"], "Оператор", set(rule_operators()))
                 validators.validate_rule_operator(payload["eventType"], payload["comparisonOperator"])
                 validators.validate_event_value(payload["eventType"], payload["compareValue"], "Сравнить с")
@@ -1504,7 +1592,8 @@ async def main(page: ft.Page):
                         name_tf,
                         description_tf,
                         enabled_sw,
-                        ft.Row(spacing=10, controls=[trigger_device_dd, event_type_tf]),
+                        ft.Row(spacing=10, controls=[trigger_device_dd, event_type_dd]),
+                        rule_status_text,
                         ft.Row(spacing=10, controls=[operator_dd, compare_tf]),
                         ft.Row(spacing=10, controls=[action_kind_dd, action_state_dd]),
                         ft.Row(spacing=10, controls=[action_device_dd, action_scene_dd]),
@@ -2253,7 +2342,7 @@ async def main(page: ft.Page):
                     spacing=12,
                     controls=[
                         T("CALHouse", size=28, weight=ft.FontWeight.BOLD),
-                        TM("Войдите или зарегистрируйте первого администратора"),
+                        TM("Войдите или зарегистрируйтесь"),
                         login_tf,
                         password_tf,
                         confirm_tf,

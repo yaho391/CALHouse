@@ -689,6 +689,22 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         return new ConnectionValidationResult(true, "unknown", "Параметры сохранены, проверка выполняется вручную", connection);
     }
 
+    private ConnectionValidationResult ValidateConnectionForSave(string provider, string protocol, Dictionary<string, string> connection)
+    {
+        provider = _catalog.NormalizeProviderCode(provider);
+        protocol = NormalizeProtocol(NormalizeOptional(protocol, _catalog.InferProtocol(provider)));
+
+        if (provider == "mock" || protocol == "manual")
+        {
+            return new ConnectionValidationResult(true, "connected", "Локальное устройство не требует сетевой проверки", connection);
+        }
+
+        EnsureRequiredConnectionFields(provider, protocol, connection);
+        ValidateConnectionFields(provider, protocol, connection);
+
+        return new ConnectionValidationResult(true, "unknown", "Параметры сохранены. Проверка связи не выполнялась", connection);
+    }
+
     private static bool TryHttpConnection(Dictionary<string, string> connection, string protocol, out string message)
     {
         try
@@ -1544,10 +1560,32 @@ LIMIT 1;";
     {
         var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT Id, Name, Description, IsEnabled, TriggerDeviceId, TriggerEventType, ComparisonOperator, CompareValue, ActionKind, ActionDeviceId, ActionTargetIsOn, ActionSceneId, CreatedAt, UpdatedAt, LastTriggeredAt, LastTriggerStatus, LastTriggerMessage
-FROM AutomationRules
-WHERE IsEnabled = 1 AND TriggerDeviceId = @triggerDeviceId AND lower(TriggerEventType) = lower(@eventType)
-ORDER BY Name;";
+SELECT ar.Id,
+       ar.Name,
+       ar.Description,
+       ar.IsEnabled,
+       ar.TriggerDeviceId,
+       ar.TriggerEventType,
+       ar.ComparisonOperator,
+       ar.CompareValue,
+       ar.ActionKind,
+       ar.ActionDeviceId,
+       ar.ActionTargetIsOn,
+       ar.ActionSceneId,
+       ar.CreatedAt,
+       ar.UpdatedAt,
+       ar.LastTriggeredAt,
+       ar.LastTriggerStatus,
+       ar.LastTriggerMessage,
+       COALESCE(td.Name, ''),
+       ad.Name,
+       s.Name
+FROM AutomationRules ar
+LEFT JOIN Devices td ON td.Id = ar.TriggerDeviceId
+LEFT JOIN Devices ad ON ad.Id = ar.ActionDeviceId
+LEFT JOIN Scenes s ON s.Id = ar.ActionSceneId
+WHERE ar.IsEnabled = 1 AND ar.TriggerDeviceId = @triggerDeviceId AND lower(ar.TriggerEventType) = lower(@eventType)
+ORDER BY ar.Name;";
         command.Parameters.AddWithValue("@triggerDeviceId", triggerDeviceId);
         command.Parameters.AddWithValue("@eventType", eventType);
         return ReadRulesFromCommand(connection, command);
@@ -1782,10 +1820,32 @@ WHERE Id = @sceneId;";
     {
         var command = connection.CreateCommand();
         command.CommandText = @"
-SELECT Id, Name, Description, IsEnabled, TriggerDeviceId, TriggerEventType, ComparisonOperator, CompareValue, ActionKind, ActionDeviceId, ActionTargetIsOn, ActionSceneId, CreatedAt, UpdatedAt, LastTriggeredAt, LastTriggerStatus, LastTriggerMessage
-FROM AutomationRules
-WHERE (@id IS NULL OR Id = @id)
-ORDER BY Name;";
+SELECT ar.Id,
+       ar.Name,
+       ar.Description,
+       ar.IsEnabled,
+       ar.TriggerDeviceId,
+       ar.TriggerEventType,
+       ar.ComparisonOperator,
+       ar.CompareValue,
+       ar.ActionKind,
+       ar.ActionDeviceId,
+       ar.ActionTargetIsOn,
+       ar.ActionSceneId,
+       ar.CreatedAt,
+       ar.UpdatedAt,
+       ar.LastTriggeredAt,
+       ar.LastTriggerStatus,
+       ar.LastTriggerMessage,
+       COALESCE(td.Name, ''),
+       ad.Name,
+       s.Name
+FROM AutomationRules ar
+LEFT JOIN Devices td ON td.Id = ar.TriggerDeviceId
+LEFT JOIN Devices ad ON ad.Id = ar.ActionDeviceId
+LEFT JOIN Scenes s ON s.Id = ar.ActionSceneId
+WHERE (@id IS NULL OR ar.Id = @id)
+ORDER BY ar.Name;";
         command.Parameters.AddWithValue("@id", (object?)ruleId ?? DBNull.Value);
         return ReadRulesFromCommand(connection, command);
     }
@@ -1815,20 +1875,10 @@ ORDER BY Name;";
                 LastTriggeredAt = reader.IsDBNull(14) ? null : ParseUtc(reader.GetString(14)),
                 LastTriggerStatus = reader.IsDBNull(15) ? null : reader.GetString(15),
                 LastTriggerMessage = reader.IsDBNull(16) ? null : reader.GetString(16),
+                TriggerDeviceName = reader.GetString(17),
+                ActionDeviceName = reader.IsDBNull(18) ? null : reader.GetString(18),
+                ActionSceneName = reader.IsDBNull(19) ? null : reader.GetString(19),
             });
-        }
-
-        foreach (var rule in rules)
-        {
-            rule.TriggerDeviceName = ReadDeviceOrThrow(connection, rule.TriggerDeviceId).Name;
-            if (rule.ActionDeviceId.HasValue)
-            {
-                rule.ActionDeviceName = ReadDeviceOrThrow(connection, rule.ActionDeviceId.Value).Name;
-            }
-            if (rule.ActionSceneId.HasValue)
-            {
-                rule.ActionSceneName = ReadScenes(connection, rule.ActionSceneId.Value, includeRuns: false).FirstOrDefault()?.Name;
-            }
         }
 
         return rules;
