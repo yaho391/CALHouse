@@ -121,7 +121,7 @@ api.MapPut("/devices/{id:int}/toggle", (int id, DeviceStore store, DeviceCommand
 api.MapPut("/devices/{id:int}/room", (int id, AssignDeviceRoomRequest request, DeviceStore store) => Handle(() => Results.Ok(store.AssignDeviceToRoom(id, request.RoomId))));
 api.MapDelete("/devices/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.DeleteDevice(id))));
 api.MapPost("/devices/validate-connection", (ValidateConnectionRequest request, DeviceStore store) => Handle(() => Results.Ok(store.ValidateConnection(request.Provider, request.Protocol, request.Connection))));
-api.MapPost("/events", (DeviceEventRequest request, DeviceStore store, DeviceCommandQueue queue) => Handle(() => Results.Ok(store.ProcessIncomingEventQueued(request.DeviceId, request.DeviceExternalId, request.EventType, request.Value, request.Message, queue))));
+api.MapPost("/events", (DeviceEventRequest request, DeviceStore store, DeviceCommandQueue queue) => Handle(() => Results.Ok(store.ProcessIncomingEventQueued(request.DeviceId, request.DeviceExternalId, request.EventType, request.Value, request.Message, queue, request.Source))));
 
 api.MapGet("/rooms", (DeviceStore store) => Results.Ok(store.GetAllRooms()));
 api.MapGet("/rooms/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.GetRoom(id))));
@@ -372,7 +372,7 @@ internal sealed record UpdateDeviceRequest(
 
 internal sealed record AssignDeviceRoomRequest(int RoomId);
 internal sealed record ValidateConnectionRequest(string? Provider, string? Protocol, Dictionary<string, string>? Connection);
-internal sealed record DeviceEventRequest(int? DeviceId, string? DeviceExternalId, string EventType, string Value, string? Message);
+internal sealed record DeviceEventRequest(int? DeviceId, string? DeviceExternalId, string EventType, string Value, string? Message, string? Source);
 internal sealed record CreateRoomRequest(string Name, string? Zone);
 internal sealed record UpdateRoomRequest(string Name, string? Zone);
 internal sealed record SceneActionRequest(int DeviceId, bool TargetIsOn, int? SortOrder);

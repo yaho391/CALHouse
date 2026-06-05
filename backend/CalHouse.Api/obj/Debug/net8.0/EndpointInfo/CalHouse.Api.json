@@ -1382,6 +1382,10 @@
           "message": {
             "type": "string",
             "nullable": true
+          },
+          "source": {
+            "type": "string",
+            "nullable": true
           }
         },
         "additionalProperties": false
