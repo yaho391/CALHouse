@@ -511,12 +511,23 @@ async def main(page: ft.Page):
         if show_toast:
             show_message("Данные обновлены")
 
+    def current_tab_sections() -> tuple[str, ...]:
+        sections_by_tab = {
+            0: ("devices", "rooms", "scenes", "rules", "schedules", "logs"),
+            1: ("devices", "rooms", "logs"),
+            2: ("rooms", "devices", "logs"),
+            3: ("scenes", "logs"),
+            4: ("rules", "logs"),
+            5: ("schedules", "logs"),
+            6: ("logs",),
+            7: ("users",),
+        }
+        return sections_by_tab.get(int(state.get("tab", 0) or 0), ("devices", "rooms", "logs"))
+
     async def refresh_and_build(*sections: str, show_toast: bool = False):
-        if sections:
-            await refresh_sections(*sections, show_toast=show_toast)
-        else:
-            await refresh_all(show_toast=show_toast)
-        build()
+        target_sections = sections or current_tab_sections()
+        await refresh_sections(*target_sections, show_toast=show_toast)
+        render_current_view()
 
     def async_click(handler):
         async def wrapper(e):
@@ -736,7 +747,7 @@ async def main(page: ft.Page):
 
     def switch_tab(index: int):
         state["tab"] = index
-        build()
+        render_current_view(update_nav=True)
 
     def confirm_action(title: str, message: str, action):
         dialog_ref = None
@@ -1732,6 +1743,14 @@ async def main(page: ft.Page):
                                 "Привет)))))",
                                 color=c("hero_muted"),
                             ),
+                            ft.Column(
+                                spacing=2,
+                                controls=[
+                                    ft.Text("C - Calm", color=c("hero_muted"), size=13),
+                                    ft.Text("A - Adaptive", color=c("hero_muted"), size=13),
+                                    ft.Text("L - Live", color=c("hero_muted"), size=13),
+                                ],
+                            ),
                             ft.Row(
                                 spacing=10,
                                 controls=[
@@ -2046,7 +2065,7 @@ async def main(page: ft.Page):
         async def load_after_auth(expected_token: str | None):
             await refresh_all()
             if state.get("token") == expected_token:
-                build()
+                render_current_view()
 
         previous_task = state.get("auth_refresh_task")
         if isinstance(previous_task, asyncio.Task) and not previous_task.done():
@@ -2255,13 +2274,13 @@ async def main(page: ft.Page):
     async def set_user_role(user_id: int, role: str):
         await api_request("put", f"/api/users/{user_id}/role", {"role": role})
         await refresh_sections("users", "logs")
-        build()
+        render_current_view()
         show_message("Роль пользователя обновлена")
 
     async def set_user_active(user_id: int, is_active: bool):
         await api_request("put", f"/api/users/{user_id}/active", {"isActive": is_active})
         await refresh_sections("users", "logs")
-        build()
+        render_current_view()
         show_message("Пользователь активирован" if is_active else "Пользователь заблокирован")
 
     def validate_admin_password(value: Any) -> str:
@@ -2274,7 +2293,7 @@ async def main(page: ft.Page):
         clean_password = validate_admin_password(password_value)
         await api_request("put", f"/api/users/{user_id}/password", {"password": clean_password, "confirmPassword": clean_password})
         await refresh_sections("users", "logs")
-        build()
+        render_current_view()
         show_message("Пароль сброшен")
 
     def users_admin_panel() -> ft.Control:
@@ -2481,9 +2500,39 @@ async def main(page: ft.Page):
 
     def on_nav_change(e: ft.ControlEvent):
         state["tab"] = int(e.control.selected_index)
-        build()
+        render_current_view(update_nav=True)
 
     nav.on_change = on_nav_change
+
+    def current_view() -> ft.Control:
+        views = {
+            0: home_view,
+            1: devices_view,
+            2: rooms_view,
+            3: scenes_view,
+            4: rules_view,
+            5: schedules_view,
+            6: history_view,
+            7: settings_view,
+        }
+        return views.get(state["tab"], home_view)()
+
+    def render_current_view(update_nav: bool = False):
+        if not is_authenticated():
+            build()
+            return
+        if update_nav:
+            nav.selected_index = state["tab"]
+        content.content = current_view()
+        if getattr(content, "page", None):
+            content.update()
+            if update_nav:
+                try:
+                    nav.update()
+                except Exception:
+                    pass
+        else:
+            page.update()
 
     def build():
         page.bgcolor = c("bg")
@@ -2509,17 +2558,7 @@ async def main(page: ft.Page):
                 ft.TextButton("Выйти", on_click=lambda e: logout()),
             ],
         )
-        views = {
-            0: home_view,
-            1: devices_view,
-            2: rooms_view,
-            3: scenes_view,
-            4: rules_view,
-            5: schedules_view,
-            6: history_view,
-            7: settings_view,
-        }
-        content.content = views.get(state["tab"], home_view)()
+        content.content = current_view()
         page.controls.clear()
         page.add(content)
         page.update()
