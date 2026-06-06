@@ -82,7 +82,7 @@
     "id": 26,
     "name": "\u0414\u0435\u043C\u043E-\u043B\u0430\u043C\u043F\u0430",
     "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
-    "isOn": false,
+    "isOn": true,
     "type": "light",
     "provider": "demo",
     "protocol": "manual",

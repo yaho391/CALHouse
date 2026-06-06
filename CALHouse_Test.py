@@ -235,8 +235,8 @@ DEMO_PRESENTATION_STEPS = [
     {
         "id": "history_hint",
         "title": "Показать журнал/историю",
-        "description": "Обновить логи и подсказать, где смотреть историю.",
-        "hint": "Важные действия и события попадают в журнал, чтобы можно было понять, что произошло и почему.",
+        "description": "Обновить логи истории.",
+        "hint": "",
         "required": [],
     },
 ]
@@ -3691,9 +3691,6 @@ async def main(page: ft.Page):
     def build_demo_presentation_panel() -> ft.Control:
         steps = get_demo_presentation_steps()
         started = bool(state.get("demo_presentation_started"))
-        active_step_id = str(state.get("demo_presentation_active_step") or (steps[0]["id"] if steps else ""))
-        active_step = next((step for step in steps if step["id"] == active_step_id), steps[0] if steps else None)
-        hint_text = str(state.get("demo_presentation_hint") or (active_step or {}).get("hint") or "Нажмите «Начать демонстрацию», затем выполняйте шаги по одному.")
         return ft.Container(
             width=390,
             padding=14,
@@ -3717,22 +3714,9 @@ async def main(page: ft.Page):
                         ],
                     ),
                     ft.Container(
-                        padding=10,
-                        border_radius=12,
-                        bgcolor=c("field"),
-                        border=ft.border.all(1, c("border")),
-                        content=ft.Column(
-                            spacing=4,
-                            controls=[
-                                T("Что сказать", weight=ft.FontWeight.BOLD, size=12),
-                                TM(hint_text, size=12),
-                            ],
-                        ),
-                    ),
-                    ft.Container(
                         height=220,
-                        content=ft.Column(
-                            scroll=ft.ScrollMode.AUTO,
+                        content=scrollable_view(
+                            "visual_demo_presentation_steps",
                             spacing=8,
                             controls=[build_demo_step_card(step, index) for index, step in enumerate(steps)],
                         ),
@@ -4012,22 +3996,6 @@ async def main(page: ft.Page):
         )
         show_dialog(dialog)
 
-    def build_visual_demo_hint() -> ft.Control:
-        return ft.Container(
-            padding=12,
-            border_radius=14,
-            bgcolor=c("field"),
-            border=ft.border.all(1, c("border")),
-            content=ft.Column(
-                spacing=6,
-                controls=[
-                    ft.Row(spacing=8, controls=[ft.Icon(ft.Icons.INFO_OUTLINE, color=c("accent")), T("Подсказка для демонстрации", weight=ft.FontWeight.BOLD)]),
-                    TM("Визуализация вызывает настоящие backend endpoints. Demo-устройства работают локально и не обращаются к физическому оборудованию.", size=12),
-                    TM("Быстрый показ: создать демо-набор -> включить лампу -> сымитировать движение -> перевести время к вечеру -> сымитировать протечку -> запустить «Все выключить».", size=12),
-                ],
-            ),
-        )
-
     def visualization_view() -> ft.Control:
         selected_room = visual_selected_room_id()
         room_dd = dropdown(label="Комната", value=selected_room, options=room_options(), width=280)
@@ -4051,7 +4019,6 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=[room_dd, ft.ElevatedButton("Добавить демо-устройство", icon=ft.Icons.ADD_HOME, visible=is_admin(), on_click=lambda e: open_visual_demo_device_dialog())]),
                     ],
                 ),
-                build_visual_demo_hint(),
                 build_demo_clock_controls(),
                 build_visual_automation_panel(),
                 *([loading] if loading else []),
