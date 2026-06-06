@@ -358,6 +358,7 @@ async def main(page: ft.Page):
         "loading_sections": set(),
         "refreshing_keys": set(),
         "last_refresh_started": {},
+        "view_scroll_offsets": {},
         "visible_limits": {"devices": INITIAL_LIST_LIMIT, "rules": INITIAL_LIST_LIMIT, "logs": INITIAL_LIST_LIMIT},
         "pending_card_reveals": [],
         "visual_room_id": None,
@@ -412,6 +413,50 @@ async def main(page: ft.Page):
         animate=ft.Animation(160, ft.AnimationCurve.EASE_OUT),
         animate_opacity=ft.Animation(TAB_FADE_MS, ft.AnimationCurve.EASE_OUT),
     )
+
+    def view_scroll_offsets() -> dict[str, float]:
+        offsets = state.get("view_scroll_offsets")
+        if not isinstance(offsets, dict):
+            offsets = {}
+            state["view_scroll_offsets"] = offsets
+        return offsets
+
+    def remember_view_scroll(view_key: str):
+        def on_scroll(e):
+            try:
+                view_scroll_offsets()[view_key] = max(0.0, float(getattr(e, "pixels", 0) or 0))
+            except Exception:
+                pass
+
+        return on_scroll
+
+    async def restore_view_scroll_later(control: ft.Control, view_key: str):
+        offset = float(view_scroll_offsets().get(view_key, 0) or 0)
+        if offset <= 0:
+            return
+        for _ in range(6):
+            await asyncio.sleep(0.03)
+            if getattr(control, "page", None):
+                try:
+                    await control.scroll_to(offset=offset, duration=0)
+                except Exception:
+                    pass
+                return
+
+    def scrollable_view(view_key: str, *, controls: list[ft.Control], spacing: int = 14, **kwargs) -> ft.Column:
+        view = ft.Column(
+            scroll=ft.ScrollMode.AUTO,
+            scroll_interval=80,
+            on_scroll=remember_view_scroll(view_key),
+            spacing=spacing,
+            controls=controls,
+            **kwargs,
+        )
+        try:
+            asyncio.create_task(restore_view_scroll_later(view, view_key))
+        except RuntimeError:
+            pass
+        return view
 
     def palette() -> dict[str, str]:
         return DARK_PALETTE if state["dark"] else LIGHT_PALETTE
@@ -1316,23 +1361,28 @@ async def main(page: ft.Page):
             return provider_code(raw)
 
         def update_dynamic_form_controls():
+            any_updated = False
             for control in [type_dd, provider_dd, protocol_tf, channel_tf, note_text, form_status_text, is_on_sw, connection_fields_column]:
                 try:
                     if getattr(control, "page", None):
                         control.update()
+                        any_updated = True
                 except Exception:
                     pass
             try:
                 if getattr(dialog.content, "page", None):
                     dialog.content.update()
+                    any_updated = True
             except Exception:
                 pass
             try:
                 if getattr(dialog, "page", None):
                     dialog.update()
+                    any_updated = True
             except Exception:
                 pass
-            page.update()
+            if not any_updated:
+                page.update()
 
         def sync_provider_options(type_code: Any, preferred_provider: Any | None = None, source: str = "sync"):
             provider_before = provider_dd.value
@@ -2482,7 +2532,7 @@ async def main(page: ft.Page):
                     pass
 
         if phase_changed and int(state.get("tab", 0) or 0) == 6:
-            render_current_view()
+            refresh_visual_regions()
 
     def on_demo_time_changed(action: str | None = None):
         previous_phase = str(state.get("visual_day_phase") or "day")
@@ -2528,7 +2578,7 @@ async def main(page: ft.Page):
         add_visual_scene_log("demo-time started")
         ensure_demo_clock_task()
         update_visual_time_controls()
-        render_current_view()
+        refresh_visual_regions()
 
     def pause_demo_clock(add_log: bool = True):
         if not state.get("visual_demo_time_running"):
@@ -2543,7 +2593,7 @@ async def main(page: ft.Page):
             add_visual_scene_log("demo-time paused")
         update_visual_time_controls()
         if int(state.get("tab", 0) or 0) == 6:
-            render_current_view()
+            refresh_visual_regions()
 
     def reset_demo_clock():
         state["visual_demo_time_running"] = False
@@ -2552,7 +2602,7 @@ async def main(page: ft.Page):
             task.cancel()
         state["visual_demo_clock_task"] = None
         set_demo_time(DEMO_CLOCK_START_MINUTES, "demo-time reset")
-        render_current_view()
+        refresh_visual_regions()
 
     def build_visual_scene_events() -> list[ft.Control]:
         logs = state.get("visual_scene_logs")
@@ -2614,7 +2664,7 @@ async def main(page: ft.Page):
 
     async def refresh_visual_devices_state():
         await refresh_sections("devices", "logs")
-        render_current_view()
+        refresh_visual_regions()
 
     async def trigger_visual_event_rules(device: dict[str, Any], event_type: str, value: Any):
         room_id = device.get("roomId")
@@ -2652,7 +2702,7 @@ async def main(page: ft.Page):
         if scenario_id in pending:
             return
         pending.add(scenario_id)
-        render_current_view()
+        refresh_visual_regions()
         try:
             result = await visualization_api_request("post", f"/api/visual-demo/scenarios/{scenario_id}", {"roomId": int(room_id)})
             handle_visual_automation_result(result)
@@ -2663,7 +2713,7 @@ async def main(page: ft.Page):
             show_message(f"Не удалось выполнить сценарий визуализации: {error_message(ex)}")
         finally:
             pending.discard(scenario_id)
-            render_current_view()
+            refresh_visual_regions()
 
     def build_visual_rules_list() -> ft.Control:
         return ft.Column(
@@ -2744,10 +2794,10 @@ async def main(page: ft.Page):
         logs = visual_automation_logs()
         logs.clear()
         add_visual_local_api_log("automation-log cleared")
-        render_current_view()
+        refresh_visual_regions()
 
     def build_visual_automation_panel() -> ft.Control:
-        return ft.Container(
+        panel = ft.Container(
             padding=14,
             bgcolor=c("card"),
             border_radius=16,
@@ -2775,6 +2825,12 @@ async def main(page: ft.Page):
                 ],
             ),
         )
+        scene_controls = state.get("visual_scene_controls")
+        if not isinstance(scene_controls, dict):
+            scene_controls = {}
+            state["visual_scene_controls"] = scene_controls
+        scene_controls["automation_panel"] = panel
+        return panel
 
     def build_visual_api_monitor() -> ft.Control:
         logs = state.get("visual_api_logs")
@@ -2812,7 +2868,7 @@ async def main(page: ft.Page):
             logs = state.get("visual_api_logs")
             if isinstance(logs, list):
                 logs.clear()
-            render_current_view()
+            refresh_visual_regions()
 
         return ft.Container(
             width=390,
@@ -2856,7 +2912,7 @@ async def main(page: ft.Page):
         if device_id in pending:
             return
         pending.add(device_id)
-        render_current_view()
+        refresh_visual_regions()
         try:
             updated = await visualization_api_request("put", f"/api/devices/{device_id}/toggle")
             if isinstance(updated, dict):
@@ -2866,7 +2922,7 @@ async def main(page: ft.Page):
             show_message(f"Не удалось изменить состояние устройства: {error_message(ex)}")
         finally:
             pending.discard(device_id)
-            render_current_view()
+            refresh_visual_regions()
 
     def visual_sensor_values() -> dict[str, dict[str, Any]]:
         values = state.get("visual_sensor_values")
@@ -2908,7 +2964,7 @@ async def main(page: ft.Page):
         if isinstance(pending, set) and device_id in pending:
             return
         set_visual_sensor_value(device, "motion", False)
-        render_current_view()
+        refresh_visual_regions()
 
     async def send_visual_demo_event(
         device: dict[str, Any],
@@ -2930,7 +2986,7 @@ async def main(page: ft.Page):
             return
 
         pending.add(device_id)
-        render_current_view()
+        refresh_visual_regions()
         clean_value = str(value).lower() if isinstance(value, bool) else str(value)
         payload = {
             "deviceId": device_id,
@@ -2952,7 +3008,7 @@ async def main(page: ft.Page):
             show_message(f"Не удалось отправить событие: {error_message(ex)}")
         finally:
             pending.discard(device_id)
-            render_current_view()
+            refresh_visual_regions()
 
     def visual_pending_row(text: str) -> ft.Control:
         return ft.Row(
@@ -3153,8 +3209,8 @@ async def main(page: ft.Page):
                         controls=[
                             ft.OutlinedButton("Старт", icon=ft.Icons.PLAY_ARROW, on_click=lambda e: start_demo_clock()),
                             ft.OutlinedButton("Пауза", icon=ft.Icons.PAUSE, on_click=lambda e: pause_demo_clock()),
-                            ft.TextButton("+1 час", on_click=lambda e: (advance_demo_time(60, "demo-time advanced +1 hour"), render_current_view())),
-                            ft.TextButton("+6 часов", on_click=lambda e: (advance_demo_time(360, "demo-time advanced +6 hours"), render_current_view())),
+                            ft.TextButton("+1 час", on_click=lambda e: (advance_demo_time(60, "demo-time advanced +1 hour"), refresh_visual_regions())),
+                            ft.TextButton("+6 часов", on_click=lambda e: (advance_demo_time(360, "demo-time advanced +6 hours"), refresh_visual_regions())),
                             ft.TextButton("Сброс", icon=ft.Icons.RESTART_ALT, on_click=lambda e: reset_demo_clock()),
                         ],
                     ),
@@ -3274,7 +3330,7 @@ async def main(page: ft.Page):
         if "preset" in pending:
             return
         pending.add("preset")
-        render_current_view()
+        refresh_visual_regions()
         try:
             created_count = 0
             for index, (kind, name) in enumerate(missing_items):
@@ -3291,7 +3347,7 @@ async def main(page: ft.Page):
             show_message(f"Не удалось создать демо-набор: {error_message(ex)}")
         finally:
             pending.discard("preset")
-            render_current_view()
+            refresh_visual_regions()
 
     async def delete_demo_device_from_scene(device: dict[str, Any], ask_confirm: bool = True):
         if not is_demo_device(device):
@@ -3307,7 +3363,7 @@ async def main(page: ft.Page):
             if key in pending:
                 return
             pending.add(key)
-            render_current_view()
+            refresh_visual_regions()
             try:
                 await visualization_api_request("delete", f"/api/devices/{device_id}")
                 remove_device_snapshot(device_id)
@@ -3318,7 +3374,7 @@ async def main(page: ft.Page):
                 show_message(f"Не удалось удалить demo-устройство: {error_message(ex)}")
             finally:
                 pending.discard(key)
-                render_current_view()
+                refresh_visual_regions()
 
         if ask_confirm:
             confirm_action("Удалить demo-устройство", f"Удалить «{device.get('name', 'demo-устройство')}» из сцены?", do_delete)
@@ -3340,7 +3396,7 @@ async def main(page: ft.Page):
             if "clear" in pending:
                 return
             pending.add("clear")
-            render_current_view()
+            refresh_visual_regions()
             failures: list[str] = []
             try:
                 for device in list(devices):
@@ -3362,7 +3418,7 @@ async def main(page: ft.Page):
                     show_message("Demo-сцена очищена")
             finally:
                 pending.discard("clear")
-                render_current_view()
+                refresh_visual_regions()
 
         confirm_action("Очистить demo-сцену", "Удалить demo-устройства из этой сцены?", do_clear)
 
@@ -3443,7 +3499,7 @@ async def main(page: ft.Page):
             state["demo_presentation_active_step"] = get_demo_presentation_steps()[0]["id"]
         state["demo_presentation_hint"] = "Выполняйте шаги по одному. Каждый backend-вызов будет виден в API-мониторе."
         add_visual_local_api_log("demo-presentation started")
-        render_current_view()
+        refresh_visual_regions()
 
     def reset_demo_presentation():
         reset_demo_clock()
@@ -3457,7 +3513,7 @@ async def main(page: ft.Page):
         if isinstance(logs, list):
             logs.clear()
         add_visual_local_api_log("demo-presentation reset")
-        render_current_view()
+        refresh_visual_regions()
 
     def skip_demo_step(step_id: str):
         if not state.get("demo_presentation_started"):
@@ -3470,7 +3526,7 @@ async def main(page: ft.Page):
             state["demo_presentation_hint"] = f"Шаг пропущен: {step['title']}"
         add_visual_local_api_log("demo-step skipped", step_id)
         activate_next_demo_step(step_id)
-        render_current_view()
+        refresh_visual_regions()
 
     def find_visual_demo_device(kind: str) -> dict[str, Any] | None:
         room_id = visual_selected_room_id()
@@ -3502,7 +3558,7 @@ async def main(page: ft.Page):
             state["demo_presentation_highlight"] = None
         set_demo_step_status(step_id, "running")
         state["demo_presentation_hint"] = step["hint"]
-        render_current_view()
+        refresh_visual_regions()
 
         try:
             ensure_visual_demo_devices(list(step.get("required") or []))
@@ -3574,7 +3630,7 @@ async def main(page: ft.Page):
             set_demo_step_status(step_id, "error", message)
             show_message(message)
         finally:
-            render_current_view()
+            refresh_visual_regions()
 
     def build_demo_step_card(step: dict[str, Any], index: int) -> ft.Control:
         step_id = str(step["id"])
@@ -3686,7 +3742,7 @@ async def main(page: ft.Page):
         )
 
     def build_visual_side_panel() -> ft.Control:
-        return ft.Column(
+        panel = ft.Column(
             width=390,
             spacing=14,
             controls=[
@@ -3694,11 +3750,75 @@ async def main(page: ft.Page):
                 build_visual_api_monitor(),
             ],
         )
+        scene_controls = state.get("visual_scene_controls")
+        if not isinstance(scene_controls, dict):
+            scene_controls = {}
+            state["visual_scene_controls"] = scene_controls
+        scene_controls["side_panel"] = panel
+        return panel
+
+    def copy_visual_container_state(target: ft.Container, source: ft.Container):
+        target.padding = source.padding
+        target.bgcolor = source.bgcolor
+        target.border_radius = source.border_radius
+        target.border = source.border
+        target.animate = source.animate
+        target.content = source.content
+
+    def refresh_visual_regions():
+        if int(state.get("tab", 0) or 0) != 6:
+            return
+        scene_controls = state.get("visual_scene_controls")
+        if not isinstance(scene_controls, dict):
+            render_current_view()
+            return
+
+        room_id = visual_selected_room_id()
+        devices = visual_room_demo_devices(room_id)
+        updated = False
+
+        scene_target = scene_controls.get("scene_container")
+        if isinstance(scene_target, ft.Container) and getattr(scene_target, "page", None):
+            next_scene = build_visual_room_scene(room_id, devices)
+            copy_visual_container_state(scene_target, next_scene)
+            scene_controls["scene_container"] = scene_target
+            try:
+                scene_target.update()
+                updated = True
+            except Exception:
+                pass
+
+        automation_target = scene_controls.get("automation_panel")
+        if isinstance(automation_target, ft.Container) and getattr(automation_target, "page", None):
+            next_automation = build_visual_automation_panel()
+            copy_visual_container_state(automation_target, next_automation)
+            scene_controls["automation_panel"] = automation_target
+            try:
+                automation_target.update()
+                updated = True
+            except Exception:
+                pass
+
+        side_target = scene_controls.get("side_panel")
+        if isinstance(side_target, ft.Column) and getattr(side_target, "page", None):
+            next_side = build_visual_side_panel()
+            side_target.width = next_side.width
+            side_target.spacing = next_side.spacing
+            side_target.controls = next_side.controls
+            scene_controls["side_panel"] = side_target
+            try:
+                side_target.update()
+                updated = True
+            except Exception:
+                pass
+
+        if not updated:
+            render_current_view()
 
     def relayout_visual_devices(room_id: str | None, devices: list[dict[str, Any]]):
         arrange_visual_devices(room_id, devices, force=True)
         add_visual_local_api_log("layout", "devices rearranged")
-        render_current_view()
+        refresh_visual_regions()
 
     def build_empty_scene_state() -> ft.Control:
         return ft.Container(
@@ -3845,7 +3965,11 @@ async def main(page: ft.Page):
         def sync_demo_initial_state(_=None):
             config = DEMO_DEVICE_TYPES.get(str(type_dd.value), DEMO_DEVICE_TYPES["demo_light"])
             is_on_sw.visible = str(config.get("category")) == "toggle"
-            page.update()
+            try:
+                if getattr(is_on_sw, "page", None):
+                    is_on_sw.update()
+            except Exception:
+                pass
 
         type_dd.on_change = sync_demo_initial_state
         sync_demo_initial_state()
@@ -3864,10 +3988,10 @@ async def main(page: ft.Page):
                 state["visual_room_id"] = str(clean_room_id)
                 close_dialog(dialog)
                 await refresh_sections("devices", "logs")
-                render_current_view()
+                refresh_visual_regions()
                 show_message("Демо-устройство добавлено")
             except Exception as ex:
-                render_current_view()
+                refresh_visual_regions()
                 show_message(error_message(ex))
 
         dialog = ft.AlertDialog(
@@ -3916,8 +4040,8 @@ async def main(page: ft.Page):
         demo_devices = visual_room_demo_devices(selected_room)
         loading = loading_banner("rooms", "devices")
         state["visual_day_phase"] = get_day_phase_by_time()
-        return ft.Column(
-            scroll=ft.ScrollMode.AUTO,
+        return scrollable_view(
+            "visualization",
             spacing=14,
             controls=[
                 ft.Row(
@@ -4346,6 +4470,8 @@ async def main(page: ft.Page):
             state["loading_sections"].clear()
         if isinstance(state.get("refreshing_keys"), set):
             state["refreshing_keys"].clear()
+        if isinstance(state.get("view_scroll_offsets"), dict):
+            state["view_scroll_offsets"].clear()
         if isinstance(state.get("visual_api_logs"), list):
             state["visual_api_logs"].clear()
         if isinstance(state.get("visual_device_positions"), dict):
