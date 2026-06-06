@@ -28,10 +28,93 @@
     "connection": {}
   },
   {
+    "id": 28,
+    "name": "\u0414\u0430\u0442\u0447\u0438\u043A \u0434\u0432\u0438\u0436\u0435\u043D\u0438\u044F",
+    "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
+    "isOn": false,
+    "type": "motion_sensor",
+    "provider": "demo",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {
+      "demoType": "demo_motion_sensor",
+      "motion": "false"
+    }
+  },
+  {
+    "id": 30,
+    "name": "\u0414\u0430\u0442\u0447\u0438\u043A \u043F\u0440\u043E\u0442\u0435\u0447\u043A\u0438",
+    "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
+    "isOn": false,
+    "type": "leak_sensor",
+    "provider": "demo",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {
+      "demoType": "demo_leak_sensor",
+      "leak": "false"
+    }
+  },
+  {
+    "id": 29,
+    "name": "\u0414\u0430\u0442\u0447\u0438\u043A \u0442\u0435\u043C\u043F\u0435\u0440\u0430\u0442\u0443\u0440\u044B",
+    "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
+    "isOn": false,
+    "type": "temperature_sensor",
+    "provider": "demo",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {
+      "demoType": "demo_temperature_sensor",
+      "temperature": "24"
+    }
+  },
+  {
+    "id": 26,
+    "name": "\u0414\u0435\u043C\u043E-\u043B\u0430\u043C\u043F\u0430",
+    "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
+    "isOn": false,
+    "type": "light",
+    "provider": "demo",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {
+      "demoType": "demo_light"
+    }
+  },
+  {
+    "id": 27,
+    "name": "\u0414\u0435\u043C\u043E-\u0440\u043E\u0437\u0435\u0442\u043A\u0430",
+    "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
+    "isOn": false,
+    "type": "socket",
+    "provider": "demo",
+    "protocol": "manual",
+    "channel": "local",
+    "externalId": "",
+    "manufacturer": "",
+    "model": "",
+    "connection": {
+      "demoType": "demo_socket"
+    }
+  },
+  {
     "id": 19,
     "name": "\u041B\u0430\u043C\u043F\u04301",
     "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
-    "isOn": true,
+    "isOn": false,
     "type": "light",
     "provider": "demo",
     "protocol": "manual",
@@ -135,7 +218,7 @@
     "id": 25,
     "name": "\u0440\u043E\u0437\u0435\u0442\u043A\u0430",
     "room": "\u0413\u043E\u0441\u0442\u0438\u043D\u0430\u044F",
-    "isOn": true,
+    "isOn": false,
     "type": "socket",
     "provider": "demo",
     "protocol": "manual",
