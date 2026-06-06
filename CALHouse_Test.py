@@ -20,6 +20,7 @@ CARD_REVEAL_MS = 170
 VISUAL_API_LOG_LIMIT = 8
 VISUAL_SCENE_LOG_LIMIT = 8
 VISUAL_AUTOMATION_LOG_LIMIT = 8
+VISUAL_API_BODY_PREVIEW_LIMIT = 700
 VISUAL_DEMO_DEVICE_LIMIT = 12
 VISUAL_SCENE_WIDTH = 720
 VISUAL_DEVICE_WIDTH = 208
@@ -561,10 +562,29 @@ async def main(page: ft.Page):
         except httpx.RequestError as ex:
             raise RuntimeError(f"API недоступен: {ex}") from ex
 
+    def sanitize_visual_api_payload(value: Any):
+        secret_markers = ("password", "token", "secret", "device_key", "apikey", "api_key", "authorization")
+        if isinstance(value, dict):
+            clean: dict[str, Any] = {}
+            for key, item in value.items():
+                key_text = str(key).lower()
+                if any(marker in key_text for marker in secret_markers):
+                    clean[key] = "***"
+                else:
+                    clean[key] = sanitize_visual_api_payload(item)
+            return clean
+        if isinstance(value, list):
+            return [sanitize_visual_api_payload(item) for item in value]
+        return value
+
     def visual_api_body_text(payload: dict[str, Any] | None) -> str:
         if payload is None:
             return ""
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+        # API-monitor is shown during demos, so keep bodies useful but never leak secrets.
+        text = json.dumps(sanitize_visual_api_payload(payload), ensure_ascii=False, indent=2)
+        if len(text) > VISUAL_API_BODY_PREVIEW_LIMIT:
+            return text[:VISUAL_API_BODY_PREVIEW_LIMIT].rstrip() + "\n..."
+        return text
 
     def add_visual_api_log(entry: dict[str, Any]):
         logs = state.get("visual_api_logs")
@@ -3517,6 +3537,22 @@ async def main(page: ft.Page):
         )
         show_dialog(dialog)
 
+    def build_visual_demo_hint() -> ft.Control:
+        return ft.Container(
+            padding=12,
+            border_radius=14,
+            bgcolor=c("field"),
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(
+                spacing=6,
+                controls=[
+                    ft.Row(spacing=8, controls=[ft.Icon(ft.Icons.INFO_OUTLINE, color=c("accent")), T("Подсказка для демонстрации", weight=ft.FontWeight.BOLD)]),
+                    TM("Визуализация вызывает настоящие backend endpoints. Demo-устройства работают локально и не обращаются к физическому оборудованию.", size=12),
+                    TM("Быстрый показ: создать демо-набор -> включить лампу -> сымитировать движение -> перевести время к вечеру -> сымитировать протечку -> запустить «Все выключить».", size=12),
+                ],
+            ),
+        )
+
     def visualization_view() -> ft.Control:
         selected_room = visual_selected_room_id()
         room_dd = dropdown(label="Комната", value=selected_room, options=room_options(), width=280)
@@ -3540,6 +3576,7 @@ async def main(page: ft.Page):
                         ft.Row(spacing=10, controls=[room_dd, ft.ElevatedButton("Добавить демо-устройство", icon=ft.Icons.ADD_HOME, visible=is_admin(), on_click=lambda e: open_visual_demo_device_dialog())]),
                     ],
                 ),
+                build_visual_demo_hint(),
                 build_demo_clock_controls(),
                 build_visual_automation_panel(),
                 *([loading] if loading else []),
