@@ -171,4 +171,3 @@ C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\tmp-build-check\ru
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\tmp-build-check\runtimes\win-arm64\native\e_sqlite3.dll
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\tmp-build-check\runtimes\win-x64\native\e_sqlite3.dll
 C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\tmp-build-check\runtimes\win-x86\native\e_sqlite3.dll
-C:\Users\pavuk\Documents\GitHub\CALHouse\backend\CalHouse.Api\obj\Debug\net8.0\staticwebassets.upToDateCheck.txt

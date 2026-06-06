@@ -200,6 +200,20 @@ public partial class DeviceStore
                     continue;
                 }
 
+                if (IsVisualDemoSource(cleanSource) && !IsVisualDemoRuleSafe(db, rule))
+                {
+                    LogEvent(
+                        db,
+                        transaction,
+                        "warning",
+                        "visual_demo",
+                        "VISUAL_RULE_SKIPPED",
+                        $"visual_demo: rule \"{rule.Name}\" skipped because its action is not limited to demo devices",
+                        deviceId: sourceDevice.Id,
+                        sceneId: rule.ActionSceneId);
+                    continue;
+                }
+
                 var run = CreatePendingRuleRun(db, transaction, rule, sourceDevice, cleanEventType, cleanValue, "Rule accepted");
                 LogEvent(db, transaction, "info", "rule-engine", "RULE_TRIGGER_ACCEPTED", $"Rule \"{rule.Name}\" accepted for background execution", deviceId: sourceDevice.Id, sceneId: rule.ActionSceneId, runId: run.Id);
                 triggered.Add(run);
@@ -246,6 +260,29 @@ public partial class DeviceStore
     {
         var clean = NormalizeOptional(source, "event-ingest").Trim().ToLowerInvariant();
         return clean is "visual_demo" or "demo" ? clean : "event-ingest";
+    }
+
+    private static bool IsVisualDemoSource(string source)
+    {
+        return source is "visual_demo" or "demo";
+    }
+
+    private bool IsVisualDemoRuleSafe(SqliteConnection db, AutomationRule rule)
+    {
+        if (string.Equals(rule.ActionKind, "device_state", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!rule.ActionDeviceId.HasValue)
+            {
+                return false;
+            }
+
+            var target = ReadDeviceOrThrow(db, rule.ActionDeviceId.Value);
+            return IsVisualDemoDevice(target);
+        }
+
+        // Visual demo events must not launch ordinary scenes because a scene can
+        // contain real devices. Built-in visual scenarios use /api/visual-demo.
+        return false;
     }
 
     private void ExecuteQueuedDeviceStateCommand(int id, bool targetIsOn, string source)
