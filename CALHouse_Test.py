@@ -20,6 +20,12 @@ CARD_REVEAL_MS = 170
 VISUAL_API_LOG_LIMIT = 8
 VISUAL_SCENE_LOG_LIMIT = 8
 VISUAL_AUTOMATION_LOG_LIMIT = 8
+VISUAL_DEMO_DEVICE_LIMIT = 12
+VISUAL_SCENE_WIDTH = 720
+VISUAL_DEVICE_WIDTH = 208
+VISUAL_DEVICE_HEIGHT = 264
+VISUAL_DEVICE_GRID_X = 232
+VISUAL_DEVICE_GRID_Y = 282
 DEMO_CLOCK_START_MINUTES = 8 * 60
 DEMO_CLOCK_TICK_SECONDS = 2.0
 
@@ -160,6 +166,14 @@ VISUAL_SCENARIOS = [
     {"id": "all_off", "name": "Все выключить", "icon": ft.Icons.POWER_SETTINGS_NEW},
 ]
 
+VISUAL_DEMO_PRESET = [
+    ("demo_light", "Демо-лампа"),
+    ("demo_socket", "Демо-розетка"),
+    ("demo_motion_sensor", "Датчик движения"),
+    ("demo_temperature_sensor", "Датчик температуры"),
+    ("demo_leak_sensor", "Датчик протечки"),
+]
+
 DEFAULT_DEVICE_TYPES = [
     {"code": "light", "displayName": "Свет", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
     {"code": "socket", "displayName": "Розетка", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
@@ -281,6 +295,9 @@ async def main(page: ft.Page):
         "pending_card_reveals": [],
         "visual_room_id": None,
         "visual_api_logs": [],
+        "visual_device_positions": {},
+        "visual_dragging_device_id": None,
+        "visual_pending_scene_action": set(),
         "visual_pending_devices": set(),
         "visual_sensor_values": {},
         "visual_scene_logs": [],
@@ -556,6 +573,19 @@ async def main(page: ft.Page):
             state["visual_api_logs"] = logs
         logs.insert(0, entry)
         del logs[VISUAL_API_LOG_LIMIT:]
+
+    def add_visual_local_api_log(action: str, details: str = "", status: str = "local"):
+        add_visual_api_log(
+            {
+                "time": datetime.now().strftime("%H:%M:%S"),
+                "method": "LOCAL",
+                "path": action,
+                "body": details,
+                "status": status,
+                "durationMs": 0,
+                "error": "",
+            }
+        )
 
     async def visualization_api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = API_TIMEOUT_SECONDS):
         started_at = perf_counter()
@@ -2178,6 +2208,72 @@ async def main(page: ft.Page):
             if str(device.get("roomId")) == str(room_id) and is_demo_device(device)
         ]
 
+    def visual_scene_height_for(devices: list[dict[str, Any]]) -> int:
+        rows = max(2, (len(devices) + 2) // 3)
+        return max(620, 190 + rows * VISUAL_DEVICE_GRID_Y)
+
+    def visual_position_store() -> dict[str, dict[str, dict[str, float]]]:
+        store = state.get("visual_device_positions")
+        if not isinstance(store, dict):
+            store = {}
+            state["visual_device_positions"] = store
+        return store
+
+    def visual_room_positions(room_id: str | None) -> dict[str, dict[str, float]]:
+        room_key = str(room_id or "default")
+        store = visual_position_store()
+        positions = store.get(room_key)
+        if not isinstance(positions, dict):
+            positions = {}
+            store[room_key] = positions
+        return positions
+
+    def clamp_visual_position(left: float, top: float, scene_height: int) -> tuple[float, float]:
+        max_left = max(24, VISUAL_SCENE_WIDTH - VISUAL_DEVICE_WIDTH - 18)
+        max_top = max(164, scene_height - VISUAL_DEVICE_HEIGHT - 18)
+        return (
+            max(18, min(float(left), float(max_left))),
+            max(148, min(float(top), float(max_top))),
+        )
+
+    def default_visual_position(index: int, scene_height: int) -> dict[str, float]:
+        col = index % 3
+        row = index // 3
+        left, top = clamp_visual_position(28 + col * VISUAL_DEVICE_GRID_X, 164 + row * VISUAL_DEVICE_GRID_Y, scene_height)
+        return {"left": left, "top": top}
+
+    def arrange_visual_devices(room_id: str | None, devices: list[dict[str, Any]], force: bool = False):
+        positions = visual_room_positions(room_id)
+        existing_ids = {str(device.get("id")) for device in devices if device.get("id") is not None}
+        for key in list(positions.keys()):
+            if key not in existing_ids:
+                positions.pop(key, None)
+        scene_height = visual_scene_height_for(devices)
+        for index, device in enumerate(devices):
+            device_id = str(device.get("id"))
+            if not device_id:
+                continue
+            if force or device_id not in positions:
+                positions[device_id] = default_visual_position(index, scene_height)
+            else:
+                current = positions[device_id]
+                left, top = clamp_visual_position(float(current.get("left", 28)), float(current.get("top", 164)), scene_height)
+                current["left"] = left
+                current["top"] = top
+
+    def update_visual_device_position(device_id: Any, left: float, top: float, scene_height: int):
+        room_id = visual_selected_room_id()
+        positions = visual_room_positions(room_id)
+        clean_left, clean_top = clamp_visual_position(left, top, scene_height)
+        positions[str(device_id)] = {"left": clean_left, "top": clean_top}
+        return clean_left, clean_top
+
+    def remove_device_snapshot(device_id: int):
+        data["devices"] = [device for device in data["devices"] if int(device.get("id", 0) or 0) != int(device_id)]
+        for positions in visual_position_store().values():
+            if isinstance(positions, dict):
+                positions.pop(str(device_id), None)
+
     def merge_device_snapshot(updated: dict[str, Any]):
         updated_id = updated.get("id")
         for index, device in enumerate(data["devices"]):
@@ -2190,6 +2286,8 @@ async def main(page: ft.Page):
         raw = str(status)
         if raw.isdigit() and 200 <= int(raw) < 300:
             return "connected"
+        if raw == "local":
+            return "enabled"
         if raw == "timeout":
             return "warning"
         return "no_connection"
@@ -2534,7 +2632,7 @@ async def main(page: ft.Page):
     def build_visual_automation_log_list() -> ft.Control:
         logs = visual_automation_logs()
         if not logs:
-            return ft.Column(spacing=6, controls=[T("Последние срабатывания", weight=ft.FontWeight.BOLD), TM("Пока visual rules и scenarios не срабатывали", size=12)])
+            return ft.Column(spacing=6, controls=[T("Последние срабатывания", weight=ft.FontWeight.BOLD), TM("Пока правила и сценарии сцены не срабатывали", size=12)])
         return ft.Column(
             spacing=6,
             controls=[
@@ -2558,6 +2656,12 @@ async def main(page: ft.Page):
             ],
         )
 
+    def clear_visual_automation_log():
+        logs = visual_automation_logs()
+        logs.clear()
+        add_visual_local_api_log("automation-log cleared")
+        render_current_view()
+
     def build_visual_automation_panel() -> ft.Control:
         return ft.Container(
             padding=14,
@@ -2567,7 +2671,13 @@ async def main(page: ft.Page):
             content=ft.Column(
                 spacing=12,
                 controls=[
-                    ft.Row(spacing=8, controls=[ft.Icon(ft.Icons.RULE, color=c("accent")), T("Автоматизации сцены", weight=ft.FontWeight.BOLD)]),
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Row(spacing=8, controls=[ft.Icon(ft.Icons.RULE, color=c("accent")), T("Автоматизации сцены", weight=ft.FontWeight.BOLD)]),
+                            ft.TextButton("Очистить события сцены", icon=ft.Icons.CLEAR_ALL, on_click=lambda e: clear_visual_automation_log()),
+                        ],
+                    ),
                     ft.ResponsiveRow(
                         columns=12,
                         spacing=12,
@@ -2589,12 +2699,13 @@ async def main(page: ft.Page):
         for entry in entries:
             body = str(entry.get("body") or "")
             error = str(entry.get("error") or "")
+            is_local = str(entry.get("method")) == "LOCAL"
             entry_controls.append(
                 ft.Container(
                     padding=10,
                     border_radius=12,
-                    bgcolor=c("field"),
-                    border=ft.border.all(1, c("border")),
+                    bgcolor=c("field") if not is_local else ("#ECFEFF" if not state.get("dark") else "#0F2F3A"),
+                    border=ft.border.all(1, c("accent") if is_local else c("border")),
                     content=ft.Column(
                         spacing=6,
                         controls=[
@@ -2602,16 +2713,22 @@ async def main(page: ft.Page):
                                 alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                                 controls=[
                                     T(f"{entry.get('method')} {entry.get('path')}", weight=ft.FontWeight.BOLD, size=12),
-                                    status_chip(str(entry.get("status")), visual_status_color(entry.get("status"))),
+                                    status_chip("LOCAL" if is_local else str(entry.get("status")), visual_status_color(entry.get("status"))),
                                 ],
                             ),
                             TM(f"{entry.get('time')} · {entry.get('durationMs')} мс", size=12),
-                            *([TM(f"Body: {body}", size=11)] if body else []),
+                            *([TM(f"{'Details' if is_local else 'Body'}: {body}", size=11)] if body else []),
                             *([ft.Text(error, color="#DC2626", size=11)] if error else []),
                         ],
                     ),
                 )
             )
+
+        def clear_api_monitor(_=None):
+            logs = state.get("visual_api_logs")
+            if isinstance(logs, list):
+                logs.clear()
+            render_current_view()
 
         return ft.Container(
             width=390,
@@ -2626,7 +2743,13 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             T("API-монитор", weight=ft.FontWeight.BOLD),
-                            ft.Icon(ft.Icons.API, color=c("accent")),
+                            ft.Row(
+                                spacing=6,
+                                controls=[
+                                    ft.TextButton("Очистить", icon=ft.Icons.CLEAR_ALL, on_click=clear_api_monitor),
+                                    ft.Icon(ft.Icons.API, color=c("accent")),
+                                ],
+                            ),
                         ],
                     ),
                     TM("Только запросы из визуализации", size=12),
@@ -2756,6 +2879,14 @@ async def main(page: ft.Page):
         return [
             ft.Icon(config.get(icon_name, config["icon"]), size=34, color=icon_color or c("accent")),
             T(str(device.get("name", config["title"])), weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+            ft.Row(
+                alignment=ft.MainAxisAlignment.CENTER,
+                spacing=6,
+                controls=[
+                    status_chip("demo", "enabled"),
+                    TM(str(config.get("title", "demo")), size=11),
+                ],
+            ),
         ]
 
     def render_demo_toggle_device(device: dict[str, Any], config: dict[str, Any], is_pending: bool) -> ft.Control:
@@ -2769,7 +2900,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=176,
+            height=206,
             padding=12,
             border_radius=16,
             bgcolor=bg,
@@ -2805,7 +2936,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=206,
+            height=236,
             padding=12,
             border_radius=16,
             bgcolor=bg,
@@ -2842,7 +2973,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=196,
+            height=226,
             padding=12,
             border_radius=16,
             bgcolor=c("card"),
@@ -2884,7 +3015,7 @@ async def main(page: ft.Page):
 
         return ft.Container(
             width=200,
-            height=226,
+            height=246,
             padding=12,
             border_radius=16,
             bgcolor=bg,
@@ -2996,7 +3127,293 @@ async def main(page: ft.Page):
         )
         return window_container
 
+    def visual_pending_scene_actions() -> set[str]:
+        pending = state.get("visual_pending_scene_action")
+        if not isinstance(pending, set):
+            pending = set()
+            state["visual_pending_scene_action"] = pending
+        return pending
+
+    def demo_connection_defaults(kind: str) -> dict[str, str]:
+        connection = {"demoType": kind}
+        if kind == "demo_motion_sensor":
+            connection["motion"] = "false"
+        if kind == "demo_temperature_sensor":
+            connection["temperature"] = str(DEMO_DEVICE_TYPES[kind].get("default_temperature", 24))
+        if kind == "demo_leak_sensor":
+            connection["leak"] = "false"
+        return connection
+
+    def build_visual_demo_device_payload(kind: str, name: str, room_id: int, is_on: bool = False, suffix: str | None = None) -> dict[str, Any]:
+        config = DEMO_DEVICE_TYPES[kind]
+        stamp = int(datetime.now().timestamp() * 1000)
+        external_suffix = suffix or str(stamp)
+        return {
+            "name": name,
+            "roomId": int(room_id),
+            "room": None,
+            "isOn": bool(is_on) if str(config.get("category")) == "toggle" else False,
+            "type": config["device_type"],
+            "provider": "demo",
+            "protocol": "demo",
+            "channel": "local",
+            "externalId": f"{kind}-{external_suffix}",
+            "manufacturer": "CALHouse",
+            "model": config["model"],
+            "connection": demo_connection_defaults(kind),
+        }
+
+    async def create_demo_preset():
+        room_id = visual_selected_room_id()
+        if not room_id:
+            show_message("Выбери комнату")
+            return
+        existing_devices = visual_room_demo_devices(room_id)
+        if len(existing_devices) >= VISUAL_DEMO_DEVICE_LIMIT:
+            show_message("На сцене уже слишком много устройств. Удалите лишние или выберите другую комнату.")
+            return
+
+        existing_names = {str(device.get("name", "")).strip().lower() for device in existing_devices}
+        missing_items = [(kind, name) for kind, name in VISUAL_DEMO_PRESET if name.lower() not in existing_names]
+        if not missing_items:
+            show_message("Демо-набор уже создан в этой комнате")
+            return
+
+        available_slots = VISUAL_DEMO_DEVICE_LIMIT - len(existing_devices)
+        if available_slots <= 0:
+            show_message("На сцене уже слишком много устройств. Удалите лишние или выберите другую комнату.")
+            return
+        missing_items = missing_items[:available_slots]
+
+        pending = visual_pending_scene_actions()
+        if "preset" in pending:
+            return
+        pending.add("preset")
+        render_current_view()
+        try:
+            created_count = 0
+            for index, (kind, name) in enumerate(missing_items):
+                payload = build_visual_demo_device_payload(kind, name, int(room_id), suffix=f"preset-{int(datetime.now().timestamp() * 1000)}-{index}")
+                created = await visualization_api_request("post", "/api/devices", payload)
+                if isinstance(created, dict):
+                    merge_device_snapshot(created)
+                    created_count += 1
+            await refresh_sections("devices", "logs")
+            arrange_visual_devices(room_id, visual_room_demo_devices(room_id), force=True)
+            add_visual_local_api_log("layout preset", f"created={created_count}")
+            show_message(f"Демо-набор создан. Устройств добавлено: {created_count}")
+        except Exception as ex:
+            show_message(f"Не удалось создать демо-набор: {error_message(ex)}")
+        finally:
+            pending.discard("preset")
+            render_current_view()
+
+    async def delete_demo_device_from_scene(device: dict[str, Any], ask_confirm: bool = True):
+        if not is_demo_device(device):
+            show_message("Это реальное устройство. Его нельзя удалить через визуальную demo-сцену.")
+            return
+        device_id = int(device.get("id", 0) or 0)
+        if not device_id:
+            return
+
+        async def do_delete():
+            pending = visual_pending_scene_actions()
+            key = f"delete-{device_id}"
+            if key in pending:
+                return
+            pending.add(key)
+            render_current_view()
+            try:
+                await visualization_api_request("delete", f"/api/devices/{device_id}")
+                remove_device_snapshot(device_id)
+                await refresh_sections("devices", "logs")
+                add_visual_local_api_log("device removed from scene", str(device.get("name", device_id)))
+                show_message("Demo-устройство удалено со сцены")
+            except Exception as ex:
+                show_message(f"Не удалось удалить demo-устройство: {error_message(ex)}")
+            finally:
+                pending.discard(key)
+                render_current_view()
+
+        if ask_confirm:
+            confirm_action("Удалить demo-устройство", f"Удалить «{device.get('name', 'demo-устройство')}» из сцены?", do_delete)
+        else:
+            await do_delete()
+
+    async def clear_demo_scene():
+        room_id = visual_selected_room_id()
+        if not room_id:
+            show_message("Выбери комнату")
+            return
+        devices = visual_room_demo_devices(room_id)
+        if not devices:
+            show_message("В этой комнате пока нет demo-устройств")
+            return
+
+        async def do_clear():
+            pending = visual_pending_scene_actions()
+            if "clear" in pending:
+                return
+            pending.add("clear")
+            render_current_view()
+            failures: list[str] = []
+            try:
+                for device in list(devices):
+                    if not is_demo_device(device):
+                        continue
+                    device_id = int(device.get("id", 0) or 0)
+                    if not device_id:
+                        continue
+                    try:
+                        await visualization_api_request("delete", f"/api/devices/{device_id}")
+                        remove_device_snapshot(device_id)
+                    except Exception as ex:
+                        failures.append(f"{device.get('name', device_id)}: {error_message(ex)}")
+                await refresh_sections("devices", "logs")
+                add_visual_local_api_log("scene cleared", f"deleted={len(devices) - len(failures)}")
+                if failures:
+                    show_message("Часть demo-устройств не удалена: " + "; ".join(failures[:3]))
+                else:
+                    show_message("Demo-сцена очищена")
+            finally:
+                pending.discard("clear")
+                render_current_view()
+
+        confirm_action("Очистить demo-сцену", "Удалить demo-устройства из этой сцены?", do_clear)
+
+    def relayout_visual_devices(room_id: str | None, devices: list[dict[str, Any]]):
+        arrange_visual_devices(room_id, devices, force=True)
+        add_visual_local_api_log("layout", "devices rearranged")
+        render_current_view()
+
+    def build_empty_scene_state() -> ft.Control:
+        return ft.Container(
+            left=210,
+            top=220,
+            width=390,
+            padding=18,
+            border_radius=16,
+            bgcolor=c("card"),
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(
+                spacing=10,
+                horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                controls=[
+                    ft.Icon(ft.Icons.ADD_HOME_WORK_OUTLINED, size=34, color=c("accent")),
+                    T("В этой комнате пока нет demo-устройств", weight=ft.FontWeight.BOLD, text_align=ft.TextAlign.CENTER),
+                    TM("Добавьте устройство вручную или создайте готовый демо-набор.", size=12, text_align=ft.TextAlign.CENTER),
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.CENTER,
+                        spacing=8,
+                        controls=[
+                            ft.OutlinedButton("+ Добавить demo-устройство", icon=ft.Icons.ADD, visible=is_admin(), on_click=lambda e: open_visual_demo_device_dialog()),
+                            ft.ElevatedButton("Создать демо-набор", icon=ft.Icons.AUTO_AWESOME, visible=is_admin(), on_click=async_click(lambda e: run_button_action(e, create_demo_preset))),
+                        ],
+                    ),
+                ],
+            ),
+        )
+
+    def build_visual_scene_toolbar(room_id: str | None, devices: list[dict[str, Any]]) -> ft.Control:
+        pending = visual_pending_scene_actions()
+        return ft.Row(
+            wrap=True,
+            spacing=8,
+            run_spacing=8,
+            controls=[
+                ft.ElevatedButton("Создать демо-набор", icon=ft.Icons.AUTO_AWESOME, visible=is_admin(), disabled="preset" in pending, on_click=async_click(lambda e: run_button_action(e, create_demo_preset))),
+                ft.OutlinedButton("Переразложить устройства", icon=ft.Icons.GRID_VIEW, disabled=not devices, on_click=lambda e: relayout_visual_devices(room_id, devices)),
+                ft.OutlinedButton("Очистить демо-сцену", icon=ft.Icons.DELETE_SWEEP, visible=is_admin(), disabled=not devices or "clear" in pending, on_click=async_click(lambda e: clear_demo_scene())),
+            ],
+        )
+
+    def build_positioned_visual_device(device: dict[str, Any], index: int, scene_height: int) -> ft.Control:
+        room_id = visual_selected_room_id()
+        positions = visual_room_positions(room_id)
+        device_id = str(device.get("id"))
+        position = positions.get(device_id) or default_visual_position(index, scene_height)
+        left, top = clamp_visual_position(float(position.get("left", 28)), float(position.get("top", 164)), scene_height)
+        positions[device_id] = {"left": left, "top": top}
+        is_dragging = str(state.get("visual_dragging_device_id") or "") == device_id
+
+        shell = ft.Container(
+            left=left,
+            top=top,
+            width=VISUAL_DEVICE_WIDTH,
+            height=VISUAL_DEVICE_HEIGHT,
+            animate_position=ft.Animation(170, ft.AnimationCurve.EASE_OUT),
+        )
+
+        def on_drag_start(_):
+            state["visual_dragging_device_id"] = device_id
+
+        def on_drag_update(e):
+            delta = getattr(e, "local_delta", None) or getattr(e, "global_delta", None)
+            dx = float(getattr(delta, "x", 0) or 0)
+            dy = float(getattr(delta, "y", 0) or 0)
+            new_left, new_top = update_visual_device_position(device_id, float(shell.left or 0) + dx, float(shell.top or 0) + dy, scene_height)
+            shell.left = new_left
+            shell.top = new_top
+            if getattr(shell, "page", None):
+                try:
+                    shell.update()
+                except Exception:
+                    pass
+
+        def on_drag_end(_):
+            state["visual_dragging_device_id"] = None
+            add_visual_local_api_log("device moved", str(device.get("name", device_id)))
+            render_current_view()
+
+        shell.content = ft.Stack(
+            width=VISUAL_DEVICE_WIDTH,
+            height=VISUAL_DEVICE_HEIGHT,
+            controls=[
+                ft.Container(
+                    left=4,
+                    top=18,
+                    content=build_visual_demo_device(device, index),
+                    opacity=0.96 if is_dragging else 1,
+                ),
+                ft.Container(
+                    left=8,
+                    top=0,
+                    tooltip="Перетащить",
+                    content=ft.GestureDetector(
+                        drag_interval=18,
+                        mouse_cursor=ft.MouseCursor.MOVE,
+                        on_pan_start=on_drag_start,
+                        on_pan_update=on_drag_update,
+                        on_pan_end=on_drag_end,
+                        content=ft.Container(
+                            width=34,
+                            height=34,
+                            border_radius=10,
+                            bgcolor=c("field"),
+                            border=ft.border.all(1, c("border")),
+                            alignment=ft.Alignment(0, 0),
+                            content=ft.Icon(ft.Icons.OPEN_WITH, size=17, color=c("muted")),
+                        ),
+                    ),
+                ),
+                ft.Container(
+                    right=6,
+                    top=0,
+                    content=ft.IconButton(
+                        icon=ft.Icons.DELETE_OUTLINE,
+                        icon_size=17,
+                        tooltip="Удалить demo-устройство",
+                        visible=is_admin(),
+                        on_click=async_click(lambda e, d=device: delete_demo_device_from_scene(d)),
+                    ),
+                ),
+            ],
+        )
+        return shell
+
     def build_visual_room_scene(room_id: str | None, devices: list[dict[str, Any]]) -> ft.Control:
+        arrange_visual_devices(room_id, devices)
+        scene_height = visual_scene_height_for(devices)
         positioned: list[ft.Control] = [
             ft.Container(
                 left=24,
@@ -3005,36 +3422,10 @@ async def main(page: ft.Page):
             )
         ]
         for index, device in enumerate(devices):
-            col = index % 3
-            row = index // 3
-            positioned.append(
-                ft.Container(
-                    left=28 + col * 220,
-                    top=164 + row * 238,
-                    content=build_visual_demo_device(device, index),
-                )
-            )
-        scene_height = max(560, 300 + ((len(devices) + 2) // 3) * 238)
-        scene_content = (
-            ft.Stack(controls=positioned, height=scene_height)
-            if devices
-            else ft.Container(
-                height=scene_height,
-                content=ft.Stack(
-                    height=scene_height,
-                    controls=[
-                        *positioned,
-                        ft.Container(
-                            left=220,
-                            top=210,
-                            width=360,
-                            alignment=ft.Alignment(0, 0),
-                            content=TM("В этой комнате пока нет демо-устройств."),
-                        ),
-                    ],
-                ),
-            )
-        )
+            positioned.append(build_positioned_visual_device(device, index, scene_height))
+        if not devices:
+            positioned.append(build_empty_scene_state())
+        scene_content = ft.Stack(width=VISUAL_SCENE_WIDTH, height=scene_height, controls=positioned)
         phase = get_day_phase_by_time()
         scene_container = ft.Container(
             expand=True,
@@ -3050,9 +3441,10 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
                         controls=[
                             T("Комната", weight=ft.FontWeight.BOLD),
-                            TM(f"Демо-устройств: {len(devices)} · {demo_phase_title(phase)}", size=12),
+                            TM(f"Демо-устройств: {len(devices)} / {VISUAL_DEMO_DEVICE_LIMIT} · {demo_phase_title(phase)}", size=12),
                         ],
                     ),
+                    build_visual_scene_toolbar(room_id, devices),
                     scene_content,
                 ],
             ),
@@ -3079,16 +3471,6 @@ async def main(page: ft.Page):
         is_on_sw = ft.Switch(label="Включено", value=False)
         bind_live_validator(name_tf, lambda value: validators.require_safe_text(value, "Название устройства", 2, 80))
 
-        def demo_connection_defaults(kind: str) -> dict[str, str]:
-            connection = {"demoType": kind}
-            if kind == "demo_motion_sensor":
-                connection["motion"] = "false"
-            if kind == "demo_temperature_sensor":
-                connection["temperature"] = str(DEMO_DEVICE_TYPES[kind].get("default_temperature", 24))
-            if kind == "demo_leak_sensor":
-                connection["leak"] = "false"
-            return connection
-
         def sync_demo_initial_state(_=None):
             config = DEMO_DEVICE_TYPES.get(str(type_dd.value), DEMO_DEVICE_TYPES["demo_light"])
             is_on_sw.visible = str(config.get("category")) == "toggle"
@@ -3102,22 +3484,9 @@ async def main(page: ft.Page):
                 clean_name = validators.require_safe_text(name_tf.value, "Название устройства", 2, 80)
                 clean_kind = require_selected(type_dd.value, "Тип устройства", set(DEMO_DEVICE_TYPES.keys()))
                 clean_room_id = require_selected(room_dd.value, "Комната", {str(room.get("id")) for room in data["rooms"]})
-                config = DEMO_DEVICE_TYPES[clean_kind]
-                stamp = int(datetime.now().timestamp() * 1000)
-                payload = {
-                    "name": clean_name,
-                    "roomId": int(clean_room_id),
-                    "room": None,
-                    "isOn": bool(is_on_sw.value) if str(config.get("category")) == "toggle" else False,
-                    "type": config["device_type"],
-                    "provider": "demo",
-                    "protocol": "demo",
-                    "channel": "local",
-                    "externalId": f"{clean_kind}-{stamp}",
-                    "manufacturer": "CALHouse",
-                    "model": config["model"],
-                    "connection": demo_connection_defaults(clean_kind),
-                }
+                if len(visual_room_demo_devices(clean_room_id)) >= VISUAL_DEMO_DEVICE_LIMIT:
+                    raise ValueError("На сцене уже слишком много устройств. Удалите лишние или выберите другую комнату.")
+                payload = build_visual_demo_device_payload(clean_kind, clean_name, int(clean_room_id), bool(is_on_sw.value))
                 created = await visualization_api_request("post", "/api/devices", payload)
                 if isinstance(created, dict):
                     merge_device_snapshot(created)
@@ -3591,6 +3960,11 @@ async def main(page: ft.Page):
             state["refreshing_keys"].clear()
         if isinstance(state.get("visual_api_logs"), list):
             state["visual_api_logs"].clear()
+        if isinstance(state.get("visual_device_positions"), dict):
+            state["visual_device_positions"].clear()
+        state["visual_dragging_device_id"] = None
+        if isinstance(state.get("visual_pending_scene_action"), set):
+            state["visual_pending_scene_action"].clear()
         if isinstance(state.get("visual_pending_devices"), set):
             state["visual_pending_devices"].clear()
         if isinstance(state.get("visual_sensor_values"), dict):
