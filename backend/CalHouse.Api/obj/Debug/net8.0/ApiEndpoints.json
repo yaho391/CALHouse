@@ -382,7 +382,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_52",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_55",
     "RelativePath": "api/logs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -404,7 +404,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_24",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_27",
     "RelativePath": "api/rooms",
     "HttpMethod": "GET",
     "IsController": false,
@@ -420,7 +420,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_27",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_30",
     "RelativePath": "api/rooms",
     "HttpMethod": "POST",
     "IsController": false,
@@ -442,7 +442,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_25",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_28",
     "RelativePath": "api/rooms/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -464,7 +464,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_28",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_31",
     "RelativePath": "api/rooms/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -491,7 +491,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_29",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_32",
     "RelativePath": "api/rooms/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -513,7 +513,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_26",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_29",
     "RelativePath": "api/rooms/{id:int}/devices",
     "HttpMethod": "GET",
     "IsController": false,
@@ -535,7 +535,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_37",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_40",
     "RelativePath": "api/rules",
     "HttpMethod": "GET",
     "IsController": false,
@@ -551,7 +551,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_40",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_43",
     "RelativePath": "api/rules",
     "HttpMethod": "POST",
     "IsController": false,
@@ -573,7 +573,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_38",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_41",
     "RelativePath": "api/rules/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -595,7 +595,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_41",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_44",
     "RelativePath": "api/rules/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -622,7 +622,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_43",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_46",
     "RelativePath": "api/rules/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -644,7 +644,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_42",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_45",
     "RelativePath": "api/rules/{id:int}/enabled",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -671,7 +671,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_39",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_42",
     "RelativePath": "api/rules/{id:int}/runs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -698,7 +698,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_30",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_33",
     "RelativePath": "api/scenes",
     "HttpMethod": "GET",
     "IsController": false,
@@ -714,7 +714,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_33",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_36",
     "RelativePath": "api/scenes",
     "HttpMethod": "POST",
     "IsController": false,
@@ -736,7 +736,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_31",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_34",
     "RelativePath": "api/scenes/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -758,7 +758,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_34",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_37",
     "RelativePath": "api/scenes/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -785,7 +785,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_35",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_38",
     "RelativePath": "api/scenes/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -807,7 +807,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_36",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_39",
     "RelativePath": "api/scenes/{id:int}/run",
     "HttpMethod": "POST",
     "IsController": false,
@@ -829,7 +829,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_32",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_35",
     "RelativePath": "api/scenes/{id:int}/runs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -856,7 +856,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_44",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_47",
     "RelativePath": "api/schedules",
     "HttpMethod": "GET",
     "IsController": false,
@@ -872,7 +872,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_47",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_50",
     "RelativePath": "api/schedules",
     "HttpMethod": "POST",
     "IsController": false,
@@ -894,7 +894,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_45",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_48",
     "RelativePath": "api/schedules/{id:int}",
     "HttpMethod": "GET",
     "IsController": false,
@@ -916,7 +916,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_48",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_51",
     "RelativePath": "api/schedules/{id:int}",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -943,7 +943,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_51",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_54",
     "RelativePath": "api/schedules/{id:int}",
     "HttpMethod": "DELETE",
     "IsController": false,
@@ -965,7 +965,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_49",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_52",
     "RelativePath": "api/schedules/{id:int}/enabled",
     "HttpMethod": "PUT",
     "IsController": false,
@@ -992,7 +992,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_46",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_49",
     "RelativePath": "api/schedules/{id:int}/runs",
     "HttpMethod": "GET",
     "IsController": false,
@@ -1019,7 +1019,7 @@
   },
   {
     "ContainingType": "Program\u002B\u003C\u003Ec",
-    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_50",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_53",
     "RelativePath": "api/schedules/run-due",
     "HttpMethod": "POST",
     "IsController": false,
@@ -1119,6 +1119,77 @@
       {
         "Name": "request",
         "Type": "UpdateUserRoleRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": [
+      {
+        "Type": "System.Void",
+        "MediaTypes": [],
+        "StatusCode": 200
+      }
+    ]
+  },
+  {
+    "ContainingType": "Program\u002B\u003C\u003Ec",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_24",
+    "RelativePath": "api/visual-demo/events",
+    "HttpMethod": "POST",
+    "IsController": false,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "VisualDemoEventRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": [
+      {
+        "Type": "System.Void",
+        "MediaTypes": [],
+        "StatusCode": 200
+      }
+    ]
+  },
+  {
+    "ContainingType": "Program\u002B\u003C\u003Ec",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_26",
+    "RelativePath": "api/visual-demo/scenarios/{scenarioId}",
+    "HttpMethod": "POST",
+    "IsController": false,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "scenarioId",
+        "Type": "System.String",
+        "IsRequired": true
+      },
+      {
+        "Name": "request",
+        "Type": "VisualDemoScenarioRequest",
+        "IsRequired": true
+      }
+    ],
+    "ReturnTypes": [
+      {
+        "Type": "System.Void",
+        "MediaTypes": [],
+        "StatusCode": 200
+      }
+    ]
+  },
+  {
+    "ContainingType": "Program\u002B\u003C\u003Ec",
+    "Method": "\u003C\u003CMain\u003E$\u003Eb__0_25",
+    "RelativePath": "api/visual-demo/time",
+    "HttpMethod": "POST",
+    "IsController": false,
+    "Order": 0,
+    "Parameters": [
+      {
+        "Name": "request",
+        "Type": "VisualDemoTimeRequest",
         "IsRequired": true
       }
     ],

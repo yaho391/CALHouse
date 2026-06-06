@@ -22,7 +22,7 @@ VISUAL_SCENE_LOG_LIMIT = 8
 VISUAL_AUTOMATION_LOG_LIMIT = 8
 VISUAL_API_BODY_PREVIEW_LIMIT = 700
 VISUAL_DEMO_DEVICE_LIMIT = 12
-VISUAL_SCENE_WIDTH = 720
+VISUAL_SCENE_WIDTH = 860
 VISUAL_DEVICE_WIDTH = 208
 VISUAL_DEVICE_HEIGHT = 264
 VISUAL_DEVICE_GRID_X = 232
@@ -175,6 +175,72 @@ VISUAL_DEMO_PRESET = [
     ("demo_leak_sensor", "Датчик протечки"),
 ]
 
+DEMO_PRESENTATION_STEPS = [
+    {
+        "id": "prepare_scene",
+        "title": "Подготовить демо-сцену",
+        "description": "Создать demo-набор и разложить устройства.",
+        "hint": "Создаётся набор виртуальных устройств: лампа, розетка и датчики. Они проходят через backend, но не требуют физического оборудования.",
+        "required": [],
+    },
+    {
+        "id": "manual_light",
+        "title": "Показать ручное управление",
+        "description": "Включить demo-лампу через endpoint.",
+        "hint": "Нажатие в интерфейсе вызывает backend endpoint, backend меняет состояние, а визуализация обновляется после ответа.",
+        "required": ["demo_light"],
+    },
+    {
+        "id": "api_monitor",
+        "title": "Показать API-монитор",
+        "description": "Подсветить монитор запросов.",
+        "hint": "API-монитор показывает method, endpoint, body, status и время выполнения. Локальные действия помечены как LOCAL.",
+        "required": [],
+    },
+    {
+        "id": "motion_event",
+        "title": "Сымитировать движение",
+        "description": "Отправить motion=true и дать правилу включить свет.",
+        "hint": "Датчик движения отправляет событие. Backend обрабатывает событие и запускает правило, после чего лампа включается.",
+        "required": ["demo_motion_sensor", "demo_light"],
+    },
+    {
+        "id": "temperature_event",
+        "title": "Показать изменение температуры",
+        "description": "Отправить temperature_changed=29.",
+        "hint": "Демонстрация числового условия: если температура выше порога, система выполняет действие.",
+        "required": ["demo_temperature_sensor", "demo_socket"],
+    },
+    {
+        "id": "evening_time",
+        "title": "Перевести время на вечер",
+        "description": "Установить demo-time на 18:00.",
+        "hint": "Демо-время не меняет системное время компьютера. Оно работает только внутри визуализации.",
+        "required": ["demo_light"],
+    },
+    {
+        "id": "leak_event",
+        "title": "Сымитировать протечку",
+        "description": "Отправить leak=true и выключить розетку правилом.",
+        "hint": "Это пример критического события: система реагирует на протечку и выполняет защитное действие.",
+        "required": ["demo_leak_sensor", "demo_socket"],
+    },
+    {
+        "id": "all_off",
+        "title": "Запустить «Все выключить»",
+        "description": "Запустить visual scenario для demo-устройств.",
+        "hint": "Сценарий выполняет несколько действий и выключает demo-лампу и demo-розетку выбранной комнаты.",
+        "required": ["demo_light", "demo_socket"],
+    },
+    {
+        "id": "history_hint",
+        "title": "Показать журнал/историю",
+        "description": "Обновить логи и подсказать, где смотреть историю.",
+        "hint": "Важные действия и события попадают в журнал, чтобы можно было понять, что произошло и почему.",
+        "required": [],
+    },
+]
+
 DEFAULT_DEVICE_TYPES = [
     {"code": "light", "displayName": "Свет", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
     {"code": "socket", "displayName": "Розетка", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
@@ -297,7 +363,6 @@ async def main(page: ft.Page):
         "visual_room_id": None,
         "visual_api_logs": [],
         "visual_device_positions": {},
-        "visual_dragging_device_id": None,
         "visual_pending_scene_action": set(),
         "visual_pending_devices": set(),
         "visual_sensor_values": {},
@@ -310,6 +375,12 @@ async def main(page: ft.Page):
         "visual_day_phase": "day",
         "visual_clock_controls": {},
         "visual_scene_controls": {},
+        "demo_presentation_started": False,
+        "demo_presentation_active_step": None,
+        "demo_presentation_statuses": {},
+        "demo_presentation_errors": {},
+        "demo_presentation_hint": "",
+        "demo_presentation_highlight": None,
     }
     api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
 
@@ -2281,13 +2352,6 @@ async def main(page: ft.Page):
                 current["left"] = left
                 current["top"] = top
 
-    def update_visual_device_position(device_id: Any, left: float, top: float, scene_height: int):
-        room_id = visual_selected_room_id()
-        positions = visual_room_positions(room_id)
-        clean_left, clean_top = clamp_visual_position(left, top, scene_height)
-        positions[str(device_id)] = {"left": clean_left, "top": clean_top}
-        return clean_left, clean_top
-
     def remove_device_snapshot(device_id: int):
         data["devices"] = [device for device in data["devices"] if int(device.get("id", 0) or 0) != int(device_id)]
         for positions in visual_position_store().values():
@@ -2755,7 +2819,8 @@ async def main(page: ft.Page):
             padding=14,
             bgcolor=c("card"),
             border_radius=16,
-            border=ft.border.all(1, c("border")),
+            border=ft.border.all(2 if state.get("demo_presentation_highlight") == "api_monitor" else 1, c("accent") if state.get("demo_presentation_highlight") == "api_monitor" else c("border")),
+            animate=ft.Animation(180, ft.AnimationCurve.EASE_OUT),
             content=ft.Column(
                 spacing=10,
                 controls=[
@@ -3301,6 +3366,335 @@ async def main(page: ft.Page):
 
         confirm_action("Очистить demo-сцену", "Удалить demo-устройства из этой сцены?", do_clear)
 
+    def get_demo_presentation_steps() -> list[dict[str, Any]]:
+        return DEMO_PRESENTATION_STEPS
+
+    def demo_presentation_statuses() -> dict[str, str]:
+        statuses = state.get("demo_presentation_statuses")
+        if not isinstance(statuses, dict):
+            statuses = {}
+            state["demo_presentation_statuses"] = statuses
+        return statuses
+
+    def demo_presentation_errors() -> dict[str, str]:
+        errors = state.get("demo_presentation_errors")
+        if not isinstance(errors, dict):
+            errors = {}
+            state["demo_presentation_errors"] = errors
+        return errors
+
+    def demo_step_status(step_id: str) -> str:
+        return str(demo_presentation_statuses().get(step_id, "idle"))
+
+    def set_demo_step_status(step_id: str, status: str, message: str = ""):
+        demo_presentation_statuses()[step_id] = status
+        errors = demo_presentation_errors()
+        if status == "error":
+            errors[step_id] = message
+        else:
+            errors.pop(step_id, None)
+        state["demo_presentation_active_step"] = step_id
+
+    def demo_step_status_title(status: str) -> str:
+        return {
+            "idle": "Не выполнено",
+            "running": "Выполняется",
+            "done": "Выполнено",
+            "error": "Ошибка",
+            "skipped": "Пропущено",
+        }.get(status, "Не выполнено")
+
+    def demo_step_status_color(status: str) -> str:
+        return {
+            "idle": "unknown",
+            "running": "pending",
+            "done": "connected",
+            "error": "no_connection",
+            "skipped": "warning",
+        }.get(status, "unknown")
+
+    def demo_step_index(step_id: str) -> int:
+        for index, step in enumerate(get_demo_presentation_steps()):
+            if step["id"] == step_id:
+                return index
+        return -1
+
+    def activate_next_demo_step(step_id: str):
+        steps = get_demo_presentation_steps()
+        index = demo_step_index(step_id)
+        if 0 <= index + 1 < len(steps):
+            state["demo_presentation_active_step"] = steps[index + 1]["id"]
+
+    def is_demo_step_available(step_id: str) -> bool:
+        if not state.get("demo_presentation_started"):
+            return False
+        index = demo_step_index(step_id)
+        if index <= 0:
+            return True
+        previous_id = get_demo_presentation_steps()[index - 1]["id"]
+        return demo_step_status(previous_id) in {"done", "skipped"} or demo_step_status(step_id) == "error"
+
+    def start_demo_presentation():
+        if not visual_selected_room_id():
+            show_message("Выбери комнату")
+            return
+        state["demo_presentation_started"] = True
+        if not state.get("demo_presentation_active_step"):
+            state["demo_presentation_active_step"] = get_demo_presentation_steps()[0]["id"]
+        state["demo_presentation_hint"] = "Выполняйте шаги по одному. Каждый backend-вызов будет виден в API-мониторе."
+        add_visual_local_api_log("demo-presentation started")
+        render_current_view()
+
+    def reset_demo_presentation():
+        reset_demo_clock()
+        state["demo_presentation_started"] = False
+        state["demo_presentation_active_step"] = None
+        demo_presentation_statuses().clear()
+        demo_presentation_errors().clear()
+        state["demo_presentation_hint"] = ""
+        state["demo_presentation_highlight"] = None
+        logs = state.get("visual_scene_logs")
+        if isinstance(logs, list):
+            logs.clear()
+        add_visual_local_api_log("demo-presentation reset")
+        render_current_view()
+
+    def skip_demo_step(step_id: str):
+        if not state.get("demo_presentation_started"):
+            start_demo_presentation()
+        if not state.get("demo_presentation_started"):
+            return
+        set_demo_step_status(step_id, "skipped")
+        step = next((item for item in get_demo_presentation_steps() if item["id"] == step_id), None)
+        if step:
+            state["demo_presentation_hint"] = f"Шаг пропущен: {step['title']}"
+        add_visual_local_api_log("demo-step skipped", step_id)
+        activate_next_demo_step(step_id)
+        render_current_view()
+
+    def find_visual_demo_device(kind: str) -> dict[str, Any] | None:
+        room_id = visual_selected_room_id()
+        for device in visual_room_demo_devices(room_id):
+            if demo_device_kind(device) == kind:
+                return device
+        return None
+
+    def ensure_visual_demo_devices(kinds: list[str]) -> None:
+        missing = [kind for kind in kinds if find_visual_demo_device(kind) is None]
+        if missing:
+            raise ValueError("Сначала выполните шаг подготовки demo-сцены. Не найдено demo-устройство нужного типа: " + ", ".join(missing))
+
+    async def run_demo_step(step_id: str):
+        if not state.get("demo_presentation_started"):
+            start_demo_presentation()
+        if not state.get("demo_presentation_started"):
+            return
+        if not is_demo_step_available(step_id):
+            show_message("Сначала выполните или пропустите предыдущий шаг")
+            return
+        if demo_step_status(step_id) == "running":
+            return
+
+        step = next((item for item in get_demo_presentation_steps() if item["id"] == step_id), None)
+        if step is None:
+            return
+        if step_id != "api_monitor":
+            state["demo_presentation_highlight"] = None
+        set_demo_step_status(step_id, "running")
+        state["demo_presentation_hint"] = step["hint"]
+        render_current_view()
+
+        try:
+            ensure_visual_demo_devices(list(step.get("required") or []))
+            if step_id == "prepare_scene":
+                await create_demo_preset()
+                ensure_visual_demo_devices([kind for kind, _ in VISUAL_DEMO_PRESET])
+            elif step_id == "manual_light":
+                light = find_visual_demo_device("demo_light")
+                if light is None:
+                    raise ValueError("Не найдено demo-устройство нужного типа: demo_light")
+                if not bool(light.get("isOn")):
+                    await toggle_visual_demo_device(light)
+                else:
+                    add_visual_local_api_log("demo-step manual-light", "demo_light already on")
+            elif step_id == "api_monitor":
+                state["demo_presentation_highlight"] = "api_monitor"
+                add_visual_local_api_log("demo-step api-monitor", "monitor highlighted")
+                show_message("Посмотри на API-монитор справа: HTTP и LOCAL показаны отдельно")
+            elif step_id == "motion_event":
+                motion = find_visual_demo_device("demo_motion_sensor")
+                await send_visual_demo_event(
+                    motion,
+                    "motion",
+                    True,
+                    "visual_demo: сымитировано движение",
+                    ("motion", True),
+                    "visual_demo: сымитировано движение из режима демонстрации",
+                    after_success=lambda: asyncio.create_task(clear_visual_motion_later(motion)),
+                )
+            elif step_id == "temperature_event":
+                temperature = find_visual_demo_device("demo_temperature_sensor")
+                await send_visual_demo_event(
+                    temperature,
+                    "temperature_changed",
+                    29,
+                    "visual_demo: температура изменена на 29 °C",
+                    ("temperature", 29),
+                    "visual_demo: температура изменена на 29 °C из режима демонстрации",
+                )
+            elif step_id == "evening_time":
+                pause_demo_clock(add_log=False)
+                state["visual_demo_time_minutes"] = 18 * 60
+                state["visual_day_phase"] = "evening"
+                add_visual_scene_log("demo-presentation time set 18:00")
+                update_visual_time_controls(phase_changed=True)
+                await trigger_visual_time_rules("evening", "18:00")
+            elif step_id == "leak_event":
+                leak = find_visual_demo_device("demo_leak_sensor")
+                await send_visual_demo_event(
+                    leak,
+                    "leak",
+                    True,
+                    "visual_demo: обнаружена протечка",
+                    ("leak", True),
+                    "visual_demo: обнаружена протечка из режима демонстрации",
+                )
+            elif step_id == "all_off":
+                await trigger_visual_scenario("all_off")
+            elif step_id == "history_hint":
+                await refresh_sections("logs")
+                add_visual_local_api_log("demo-step history", "open History tab to show backend logs")
+                show_message("Журнал можно показать во вкладке История")
+
+            set_demo_step_status(step_id, "done")
+            state["demo_presentation_hint"] = step["hint"]
+            activate_next_demo_step(step_id)
+        except Exception as ex:
+            message = error_message(ex)
+            set_demo_step_status(step_id, "error", message)
+            show_message(message)
+        finally:
+            render_current_view()
+
+    def build_demo_step_card(step: dict[str, Any], index: int) -> ft.Control:
+        step_id = str(step["id"])
+        status = demo_step_status(step_id)
+        active = state.get("demo_presentation_active_step") == step_id
+        available = is_demo_step_available(step_id)
+        error = demo_presentation_errors().get(step_id, "")
+        can_run = available and status not in {"running", "done"}
+        can_skip = available and status not in {"running", "done", "skipped"}
+        bg = "#ECFEFF" if active and not state.get("dark") else "#0F2F3A" if active else c("field")
+        border_color = c("accent") if active else c("border")
+        return ft.Container(
+            padding=10,
+            border_radius=12,
+            bgcolor=bg,
+            border=ft.border.all(1, border_color),
+            animate=ft.Animation(170, ft.AnimationCurve.EASE_OUT),
+            content=ft.Column(
+                spacing=7,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        vertical_alignment=ft.CrossAxisAlignment.START,
+                        controls=[
+                            ft.Column(
+                                spacing=2,
+                                expand=True,
+                                controls=[
+                                    T(f"{index + 1}. {step['title']}", weight=ft.FontWeight.BOLD, size=12),
+                                    TM(str(step["description"]), size=11),
+                                ],
+                            ),
+                            status_chip(demo_step_status_title(status), demo_step_status_color(status)),
+                        ],
+                    ),
+                    *([ft.Text(error, color="#DC2626", size=11)] if error else []),
+                    ft.Row(
+                        spacing=8,
+                        controls=[
+                            ft.OutlinedButton(
+                                "Выполнить" if status != "error" else "Повторить",
+                                icon=ft.Icons.PLAY_ARROW,
+                                disabled=not can_run,
+                                on_click=async_click(lambda e, sid=step_id: run_button_action(e, lambda: run_demo_step(sid))),
+                            ),
+                            ft.TextButton(
+                                "Пропустить",
+                                icon=ft.Icons.SKIP_NEXT,
+                                disabled=not can_skip,
+                                on_click=lambda e, sid=step_id: skip_demo_step(sid),
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        )
+
+    def build_demo_presentation_panel() -> ft.Control:
+        steps = get_demo_presentation_steps()
+        started = bool(state.get("demo_presentation_started"))
+        active_step_id = str(state.get("demo_presentation_active_step") or (steps[0]["id"] if steps else ""))
+        active_step = next((step for step in steps if step["id"] == active_step_id), steps[0] if steps else None)
+        hint_text = str(state.get("demo_presentation_hint") or (active_step or {}).get("hint") or "Нажмите «Начать демонстрацию», затем выполняйте шаги по одному.")
+        return ft.Container(
+            width=390,
+            padding=14,
+            border_radius=16,
+            bgcolor=c("card"),
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(
+                spacing=12,
+                controls=[
+                    ft.Row(
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                        controls=[
+                            ft.Row(spacing=8, controls=[ft.Icon(ft.Icons.SLIDESHOW, color=c("accent")), T("Режим демонстрации", weight=ft.FontWeight.BOLD)]),
+                            ft.Row(
+                                spacing=8,
+                                controls=[
+                                    ft.ElevatedButton("Начать демонстрацию", icon=ft.Icons.PLAY_CIRCLE, disabled=started, on_click=lambda e: start_demo_presentation()),
+                                    ft.OutlinedButton("Сбросить демонстрацию", icon=ft.Icons.RESTART_ALT, on_click=lambda e: reset_demo_presentation()),
+                                ],
+                            ),
+                        ],
+                    ),
+                    ft.Container(
+                        padding=10,
+                        border_radius=12,
+                        bgcolor=c("field"),
+                        border=ft.border.all(1, c("border")),
+                        content=ft.Column(
+                            spacing=4,
+                            controls=[
+                                T("Что сказать", weight=ft.FontWeight.BOLD, size=12),
+                                TM(hint_text, size=12),
+                            ],
+                        ),
+                    ),
+                    ft.Container(
+                        height=220,
+                        content=ft.Column(
+                            scroll=ft.ScrollMode.AUTO,
+                            spacing=8,
+                            controls=[build_demo_step_card(step, index) for index, step in enumerate(steps)],
+                        ),
+                    ),
+                ],
+            ),
+        )
+
+    def build_visual_side_panel() -> ft.Control:
+        return ft.Column(
+            width=390,
+            spacing=14,
+            controls=[
+                build_demo_presentation_panel(),
+                build_visual_api_monitor(),
+            ],
+        )
+
     def relayout_visual_devices(room_id: str | None, devices: list[dict[str, Any]]):
         arrange_visual_devices(room_id, devices, force=True)
         add_visual_local_api_log("layout", "devices rearranged")
@@ -3354,7 +3748,6 @@ async def main(page: ft.Page):
         position = positions.get(device_id) or default_visual_position(index, scene_height)
         left, top = clamp_visual_position(float(position.get("left", 28)), float(position.get("top", 164)), scene_height)
         positions[device_id] = {"left": left, "top": top}
-        is_dragging = str(state.get("visual_dragging_device_id") or "") == device_id
 
         shell = ft.Container(
             left=left,
@@ -3364,27 +3757,6 @@ async def main(page: ft.Page):
             animate_position=ft.Animation(170, ft.AnimationCurve.EASE_OUT),
         )
 
-        def on_drag_start(_):
-            state["visual_dragging_device_id"] = device_id
-
-        def on_drag_update(e):
-            delta = getattr(e, "local_delta", None) or getattr(e, "global_delta", None)
-            dx = float(getattr(delta, "x", 0) or 0)
-            dy = float(getattr(delta, "y", 0) or 0)
-            new_left, new_top = update_visual_device_position(device_id, float(shell.left or 0) + dx, float(shell.top or 0) + dy, scene_height)
-            shell.left = new_left
-            shell.top = new_top
-            if getattr(shell, "page", None):
-                try:
-                    shell.update()
-                except Exception:
-                    pass
-
-        def on_drag_end(_):
-            state["visual_dragging_device_id"] = None
-            add_visual_local_api_log("device moved", str(device.get("name", device_id)))
-            render_current_view()
-
         shell.content = ft.Stack(
             width=VISUAL_DEVICE_WIDTH,
             height=VISUAL_DEVICE_HEIGHT,
@@ -3393,28 +3765,7 @@ async def main(page: ft.Page):
                     left=4,
                     top=18,
                     content=build_visual_demo_device(device, index),
-                    opacity=0.96 if is_dragging else 1,
-                ),
-                ft.Container(
-                    left=8,
-                    top=0,
-                    tooltip="Перетащить",
-                    content=ft.GestureDetector(
-                        drag_interval=18,
-                        mouse_cursor=ft.MouseCursor.MOVE,
-                        on_pan_start=on_drag_start,
-                        on_pan_update=on_drag_update,
-                        on_pan_end=on_drag_end,
-                        content=ft.Container(
-                            width=34,
-                            height=34,
-                            border_radius=10,
-                            bgcolor=c("field"),
-                            border=ft.border.all(1, c("border")),
-                            alignment=ft.Alignment(0, 0),
-                            content=ft.Icon(ft.Icons.OPEN_WITH, size=17, color=c("muted")),
-                        ),
-                    ),
+                    opacity=1,
                 ),
                 ft.Container(
                     right=6,
@@ -3585,7 +3936,7 @@ async def main(page: ft.Page):
                     vertical_alignment=ft.CrossAxisAlignment.START,
                     controls=[
                         build_visual_room_scene(selected_room, demo_devices),
-                        build_visual_api_monitor(),
+                        build_visual_side_panel(),
                     ],
                 ),
                 *([] if is_admin() else [TM("Добавление демо-устройств доступно администратору.", size=12)]),
@@ -3999,7 +4350,6 @@ async def main(page: ft.Page):
             state["visual_api_logs"].clear()
         if isinstance(state.get("visual_device_positions"), dict):
             state["visual_device_positions"].clear()
-        state["visual_dragging_device_id"] = None
         if isinstance(state.get("visual_pending_scene_action"), set):
             state["visual_pending_scene_action"].clear()
         if isinstance(state.get("visual_pending_devices"), set):
@@ -4020,6 +4370,14 @@ async def main(page: ft.Page):
         state["visual_demo_time_minutes"] = DEMO_CLOCK_START_MINUTES
         state["visual_day_phase"] = "day"
         state["visual_room_id"] = None
+        state["demo_presentation_started"] = False
+        state["demo_presentation_active_step"] = None
+        if isinstance(state.get("demo_presentation_statuses"), dict):
+            state["demo_presentation_statuses"].clear()
+        if isinstance(state.get("demo_presentation_errors"), dict):
+            state["demo_presentation_errors"].clear()
+        state["demo_presentation_hint"] = ""
+        state["demo_presentation_highlight"] = None
         clear_data()
         build()
         show_message("Выход выполнен")
