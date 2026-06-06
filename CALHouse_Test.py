@@ -19,6 +19,7 @@ TAB_FADE_MS = 180
 CARD_REVEAL_MS = 170
 VISUAL_API_LOG_LIMIT = 8
 VISUAL_SCENE_LOG_LIMIT = 8
+VISUAL_AUTOMATION_LOG_LIMIT = 8
 DEMO_CLOCK_START_MINUTES = 8 * 60
 DEMO_CLOCK_TICK_SECONDS = 2.0
 
@@ -144,6 +145,21 @@ DEMO_DEVICE_TYPES = {
     },
 }
 
+VISUAL_RULES = [
+    {"id": "motion_light", "name": "Движение включает свет", "trigger": "motion=true", "action": "demo_light ON"},
+    {"id": "leak_socket_off", "name": "Протечка выключает розетку", "trigger": "leak=true", "action": "demo_socket OFF"},
+    {"id": "temperature_socket_on", "name": "Высокая температура включает розетку", "trigger": "temperature > 28", "action": "demo_socket ON"},
+    {"id": "evening_light", "name": "Вечером включить свет", "trigger": "demo-time evening", "action": "demo_light ON"},
+    {"id": "night_socket_off", "name": "Ночью выключить розетку", "trigger": "demo-time night", "action": "demo_socket OFF"},
+]
+
+VISUAL_SCENARIOS = [
+    {"id": "evening_mode", "name": "Вечерний режим", "icon": ft.Icons.LIGHT_MODE},
+    {"id": "night_mode", "name": "Ночной режим", "icon": ft.Icons.NIGHTLIGHT},
+    {"id": "safety", "name": "Безопасность", "icon": ft.Icons.SECURITY},
+    {"id": "all_off", "name": "Все выключить", "icon": ft.Icons.POWER_SETTINGS_NEW},
+]
+
 DEFAULT_DEVICE_TYPES = [
     {"code": "light", "displayName": "Свет", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
     {"code": "socket", "displayName": "Розетка", "capabilities": {"canToggle": True}, "allowedProviders": ["mock"]},
@@ -268,6 +284,8 @@ async def main(page: ft.Page):
         "visual_pending_devices": set(),
         "visual_sensor_values": {},
         "visual_scene_logs": [],
+        "visual_automation_logs": [],
+        "visual_pending_automation": set(),
         "visual_demo_time_minutes": DEMO_CLOCK_START_MINUTES,
         "visual_demo_time_running": False,
         "visual_demo_clock_task": None,
@@ -2292,8 +2310,9 @@ async def main(page: ft.Page):
             add_visual_scene_log(action)
         if current_phase != previous_phase:
             add_visual_scene_log(f"phase changed: {current_phase}")
-        # Этап 4: здесь будет проверка time-based visual rules и запуск visual scenarios.
         update_visual_time_controls(phase_changed=current_phase != previous_phase)
+        if current_phase != previous_phase and int(state.get("tab", 0) or 0) == 6 and is_authenticated():
+            asyncio.create_task(trigger_visual_time_rules(current_phase, format_demo_time()))
 
     def set_demo_time(minutes: int, action: str | None = None):
         state["visual_demo_time_minutes"] = int(minutes) % (24 * 60)
@@ -2378,6 +2397,190 @@ async def main(page: ft.Page):
                 )
             )
         return controls
+
+    def visual_automation_logs() -> list[dict[str, Any]]:
+        logs = state.get("visual_automation_logs")
+        if not isinstance(logs, list):
+            logs = []
+            state["visual_automation_logs"] = logs
+        return logs
+
+    def add_visual_automation_log(entry: dict[str, Any]):
+        logs = visual_automation_logs()
+        logs.insert(
+            0,
+            {
+                "time": format_demo_time(),
+                "kind": str(entry.get("kind") or "rule"),
+                "name": str(entry.get("name") or "Автоматизация"),
+                "action": str(entry.get("action") or ""),
+                "status": str(entry.get("status") or "completed"),
+                "message": str(entry.get("message") or ""),
+            },
+        )
+        del logs[VISUAL_AUTOMATION_LOG_LIMIT:]
+
+    def handle_visual_automation_result(result: Any):
+        if not isinstance(result, dict):
+            return
+        for item in result.get("devices") or []:
+            if isinstance(item, dict):
+                merge_device_snapshot(item)
+        for item in result.get("automations") or []:
+            if isinstance(item, dict):
+                add_visual_automation_log(item)
+
+    async def refresh_visual_devices_state():
+        await refresh_sections("devices", "logs")
+        render_current_view()
+
+    async def trigger_visual_event_rules(device: dict[str, Any], event_type: str, value: Any):
+        room_id = device.get("roomId")
+        device_id = device.get("id")
+        if room_id is None or device_id is None:
+            return
+        payload = {
+            "roomId": int(room_id),
+            "sourceDeviceId": int(device_id),
+            "eventType": event_type,
+            "value": str(value).lower() if isinstance(value, bool) else str(value),
+            "demoTime": format_demo_time(),
+        }
+        result = await visualization_api_request("post", "/api/visual-demo/events", payload)
+        handle_visual_automation_result(result)
+
+    async def trigger_visual_time_rules(phase: str, demo_time: str):
+        room_id = visual_selected_room_id()
+        if not room_id:
+            return
+        payload = {"roomId": int(room_id), "demoTime": demo_time, "phase": phase}
+        result = await visualization_api_request("post", "/api/visual-demo/time", payload)
+        handle_visual_automation_result(result)
+        await refresh_visual_devices_state()
+
+    async def trigger_visual_scenario(scenario_id: str):
+        room_id = visual_selected_room_id()
+        if not room_id:
+            show_message("Выбери комнату")
+            return
+        pending = state.get("visual_pending_automation")
+        if not isinstance(pending, set):
+            pending = set()
+            state["visual_pending_automation"] = pending
+        if scenario_id in pending:
+            return
+        pending.add(scenario_id)
+        render_current_view()
+        try:
+            result = await visualization_api_request("post", f"/api/visual-demo/scenarios/{scenario_id}", {"roomId": int(room_id)})
+            handle_visual_automation_result(result)
+            await refresh_visual_devices_state()
+            show_message("Сценарий визуализации выполнен")
+        except Exception as ex:
+            add_visual_automation_log({"kind": "scenario", "name": scenario_id, "action": "error", "status": "error", "message": error_message(ex)})
+            show_message(f"Не удалось выполнить сценарий визуализации: {error_message(ex)}")
+        finally:
+            pending.discard(scenario_id)
+            render_current_view()
+
+    def build_visual_rules_list() -> ft.Control:
+        return ft.Column(
+            spacing=6,
+            controls=[
+                T("Правила сцены", weight=ft.FontWeight.BOLD),
+                *[
+                    ft.Container(
+                        padding=8,
+                        border_radius=10,
+                        bgcolor=c("field"),
+                        border=ft.border.all(1, c("border")),
+                        content=ft.Row(
+                            alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                            controls=[
+                                ft.Column(spacing=2, controls=[T(rule["name"], size=12, weight=ft.FontWeight.BOLD), TM(f"{rule['trigger']} -> {rule['action']}", size=11)]),
+                                status_chip("Активно", "enabled"),
+                            ],
+                        ),
+                    )
+                    for rule in VISUAL_RULES
+                ],
+            ],
+        )
+
+    def build_visual_scenarios_list() -> ft.Control:
+        pending = state.get("visual_pending_automation")
+        pending_set = pending if isinstance(pending, set) else set()
+        return ft.Column(
+            spacing=6,
+            controls=[
+                T("Сценарии сцены", weight=ft.FontWeight.BOLD),
+                ft.Row(
+                    wrap=True,
+                    spacing=8,
+                    run_spacing=8,
+                    controls=[
+                        ft.OutlinedButton(
+                            scenario["name"],
+                            icon=scenario["icon"],
+                            disabled=scenario["id"] in pending_set,
+                            on_click=async_click(lambda e, scenario_id=scenario["id"]: trigger_visual_scenario(str(scenario_id))),
+                        )
+                        for scenario in VISUAL_SCENARIOS
+                    ],
+                ),
+            ],
+        )
+
+    def build_visual_automation_log_list() -> ft.Control:
+        logs = visual_automation_logs()
+        if not logs:
+            return ft.Column(spacing=6, controls=[T("Последние срабатывания", weight=ft.FontWeight.BOLD), TM("Пока visual rules и scenarios не срабатывали", size=12)])
+        return ft.Column(
+            spacing=6,
+            controls=[
+                T("Последние срабатывания", weight=ft.FontWeight.BOLD),
+                *[
+                    ft.Container(
+                        padding=8,
+                        border_radius=10,
+                        bgcolor=c("field"),
+                        border=ft.border.all(1, c("border")),
+                        content=ft.Column(
+                            spacing=3,
+                            controls=[
+                                ft.Row(alignment=ft.MainAxisAlignment.SPACE_BETWEEN, controls=[T(f"{item['time']} · {item['name']}", size=12, weight=ft.FontWeight.BOLD), status_chip(str(item["status"]), "connected" if item["status"] == "completed" else "warning")]),
+                                TM(str(item.get("action") or item.get("message") or ""), size=11),
+                            ],
+                        ),
+                    )
+                    for item in logs[:5]
+                ],
+            ],
+        )
+
+    def build_visual_automation_panel() -> ft.Control:
+        return ft.Container(
+            padding=14,
+            bgcolor=c("card"),
+            border_radius=16,
+            border=ft.border.all(1, c("border")),
+            content=ft.Column(
+                spacing=12,
+                controls=[
+                    ft.Row(spacing=8, controls=[ft.Icon(ft.Icons.RULE, color=c("accent")), T("Автоматизации сцены", weight=ft.FontWeight.BOLD)]),
+                    ft.ResponsiveRow(
+                        columns=12,
+                        spacing=12,
+                        run_spacing=12,
+                        controls=[
+                            ft.Container(col={"sm": 12, "md": 4}, content=build_visual_rules_list()),
+                            ft.Container(col={"sm": 12, "md": 4}, content=build_visual_scenarios_list()),
+                            ft.Container(col={"sm": 12, "md": 4}, content=build_visual_automation_log_list()),
+                        ],
+                    ),
+                ],
+            ),
+        )
 
     def build_visual_api_monitor() -> ft.Control:
         logs = state.get("visual_api_logs")
@@ -2530,6 +2733,7 @@ async def main(page: ft.Page):
         }
         try:
             await visualization_api_request("post", "/api/events", payload)
+            await trigger_visual_event_rules(device, event_type, value)
             if state_update is not None:
                 set_visual_sensor_value(device, state_update[0], state_update[1])
             if after_success is not None:
@@ -2968,6 +3172,7 @@ async def main(page: ft.Page):
                     ],
                 ),
                 build_demo_clock_controls(),
+                build_visual_automation_panel(),
                 *([loading] if loading else []),
                 ft.Row(
                     spacing=14,
@@ -3392,6 +3597,10 @@ async def main(page: ft.Page):
             state["visual_sensor_values"].clear()
         if isinstance(state.get("visual_scene_logs"), list):
             state["visual_scene_logs"].clear()
+        if isinstance(state.get("visual_automation_logs"), list):
+            state["visual_automation_logs"].clear()
+        if isinstance(state.get("visual_pending_automation"), set):
+            state["visual_pending_automation"].clear()
         clock_task = state.get("visual_demo_clock_task")
         if isinstance(clock_task, asyncio.Task) and not clock_task.done():
             clock_task.cancel()

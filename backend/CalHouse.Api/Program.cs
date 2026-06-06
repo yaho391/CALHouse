@@ -122,6 +122,9 @@ api.MapPut("/devices/{id:int}/room", (int id, AssignDeviceRoomRequest request, D
 api.MapDelete("/devices/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.DeleteDevice(id))));
 api.MapPost("/devices/validate-connection", (ValidateConnectionRequest request, DeviceStore store) => Handle(() => Results.Ok(store.ValidateConnection(request.Provider, request.Protocol, request.Connection))));
 api.MapPost("/events", (DeviceEventRequest request, DeviceStore store, DeviceCommandQueue queue) => Handle(() => Results.Ok(store.ProcessIncomingEventQueued(request.DeviceId, request.DeviceExternalId, request.EventType, request.Value, request.Message, queue, request.Source))));
+api.MapPost("/visual-demo/events", (VisualDemoEventRequest request, DeviceStore store) => Handle(() => Results.Ok(store.ProcessVisualDemoEvent(request.RoomId, request.SourceDeviceId, request.EventType, request.Value, request.DemoTime))));
+api.MapPost("/visual-demo/time", (VisualDemoTimeRequest request, DeviceStore store) => Handle(() => Results.Ok(store.ProcessVisualDemoTimeChanged(request.RoomId, request.DemoTime, request.Phase))));
+api.MapPost("/visual-demo/scenarios/{scenarioId}", (string scenarioId, VisualDemoScenarioRequest request, DeviceStore store) => Handle(() => Results.Ok(store.RunVisualDemoScenario(request.RoomId, scenarioId))));
 
 api.MapGet("/rooms", (DeviceStore store) => Results.Ok(store.GetAllRooms()));
 api.MapGet("/rooms/{id:int}", (int id, DeviceStore store) => Handle(() => Results.Ok(store.GetRoom(id))));
@@ -311,6 +314,11 @@ static bool IsAuthorized(AuthenticatedUser user, string method, string path)
         return true;
     }
 
+    if (HttpMethods.IsPost(method) && path.StartsWith("/api/visual-demo", StringComparison.OrdinalIgnoreCase))
+    {
+        return true;
+    }
+
     return false;
 }
 
@@ -373,6 +381,9 @@ internal sealed record UpdateDeviceRequest(
 internal sealed record AssignDeviceRoomRequest(int RoomId);
 internal sealed record ValidateConnectionRequest(string? Provider, string? Protocol, Dictionary<string, string>? Connection);
 internal sealed record DeviceEventRequest(int? DeviceId, string? DeviceExternalId, string EventType, string Value, string? Message, string? Source);
+internal sealed record VisualDemoEventRequest(int RoomId, int SourceDeviceId, string EventType, string Value, string? DemoTime);
+internal sealed record VisualDemoTimeRequest(int RoomId, string DemoTime, string Phase);
+internal sealed record VisualDemoScenarioRequest(int RoomId);
 internal sealed record CreateRoomRequest(string Name, string? Zone);
 internal sealed record UpdateRoomRequest(string Name, string? Zone);
 internal sealed record SceneActionRequest(int DeviceId, bool TargetIsOn, int? SortOrder);
