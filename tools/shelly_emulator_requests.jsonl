@@ -1,0 +1,3 @@
+{"ts": "2026-06-07T13:56:07.099869+00:00", "method": "GET", "path": "/rpc/Switch.Set", "query": {"id": "0", "on": "true"}, "client": "127.0.0.1", "authorization": ""}
+{"ts": "2026-06-07T14:07:53.821716+00:00", "method": "GET", "path": "/rpc/Switch.Set", "query": {"id": "0", "on": "true"}, "client": "127.0.0.1", "authorization": ""}
+{"ts": "2026-06-07T14:07:54.027019+00:00", "method": "GET", "path": "/rpc/Switch.Set", "query": {"id": "0", "on": "false"}, "client": "127.0.0.1", "authorization": ""}

@@ -1,0 +1,3 @@
+{"ts": "2026-06-07T13:23:52.148374+00:00", "method": "GET", "path": "/cm", "query": {"cmnd": "Power On"}, "cmnd": "Power On", "client": "127.0.0.1"}
+{"ts": "2026-06-07T13:26:37.419401+00:00", "method": "GET", "path": "/cm", "query": {"cmnd": "Power On"}, "cmnd": "Power On", "client": "127.0.0.1"}
+{"ts": "2026-06-07T13:26:37.607479+00:00", "method": "GET", "path": "/cm", "query": {"cmnd": "Power Off"}, "cmnd": "Power Off", "client": "127.0.0.1"}

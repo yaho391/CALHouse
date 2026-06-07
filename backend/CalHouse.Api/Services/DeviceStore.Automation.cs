@@ -1066,6 +1066,16 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             return ExecuteHomeAssistantCommand(device, targetIsOn);
         }
 
+        if (provider == "tasmota")
+        {
+            return ExecuteTasmotaCommand(device, protocol, targetIsOn);
+        }
+
+        if (provider == "shelly")
+        {
+            return ExecuteShellyCommand(device, protocol, targetIsOn);
+        }
+
         if (provider is "mock" or "demo" || protocol is "manual" or "demo")
         {
             return new DeviceCommandResult(true, "connected", "Локальное устройство переключено без сетевой команды");
@@ -1075,6 +1085,160 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             true,
             string.IsNullOrWhiteSpace(device.ConnectionStatus) ? "unknown" : device.ConnectionStatus,
             string.IsNullOrWhiteSpace(device.ConnectionMessage) ? "Состояние устройства обновлено локально" : device.ConnectionMessage);
+    }
+
+    private static DeviceCommandResult ExecuteShellyCommand(Device device, string protocol, bool targetIsOn)
+    {
+        try
+        {
+            var url = BuildShellyCommandUrl(device.Connection, protocol, targetIsOn);
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            AddBasicAuthIfPresent(request, device.Connection);
+
+            using var response = client.Send(request);
+            var safeUrl = RedactSensitiveText(url);
+            var message = $"Shelly GET {safeUrl} -> {(int)response.StatusCode}";
+
+            return new DeviceCommandResult(
+                response.IsSuccessStatusCode,
+                response.IsSuccessStatusCode ? "connected" : "no_connection",
+                message);
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"Shelly command timeout: {ex.Message}");
+        }
+        catch (TimeoutException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"Shelly command timeout: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return new DeviceCommandResult(false, "no_connection", $"Не удалось выполнить команду Shelly: {ex.Message}");
+        }
+    }
+
+    private static string BuildShellyCommandUrl(Dictionary<string, string> connection, string protocol, bool targetIsOn)
+    {
+        var commandConnection = new Dictionary<string, string>(connection, StringComparer.OrdinalIgnoreCase);
+        var path = GetConnectionValue(commandConnection, "path");
+        var switchId = NormalizeShellySwitchId(GetConnectionValue(commandConnection, "switch_id", "relay_id", "id"));
+
+        if (path.Contains("/relay", StringComparison.OrdinalIgnoreCase))
+        {
+            commandConnection["path"] = path;
+            var relayUrl = BuildHttpUrl(commandConnection, protocol);
+            return AppendQueryParameters(relayUrl, [new KeyValuePair<string, string>("turn", targetIsOn ? "on" : "off")]);
+        }
+
+        commandConnection["path"] = "/rpc/Switch.Set";
+        var rpcUrl = BuildHttpUrl(commandConnection, protocol);
+        return AppendQueryParameters(
+            rpcUrl,
+            [
+                new KeyValuePair<string, string>("id", switchId),
+                new KeyValuePair<string, string>("on", targetIsOn ? "true" : "false"),
+            ]);
+    }
+
+    private static string NormalizeShellySwitchId(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return "0";
+        }
+        if (!int.TryParse(value, NumberStyles.None, CultureInfo.InvariantCulture, out var id) || id < 0)
+        {
+            throw new ValidationProblemException("Shelly switch_id должен быть неотрицательным числом", "DEVICE_CONNECTION_SHELLY_ID_INVALID");
+        }
+        return id.ToString(CultureInfo.InvariantCulture);
+    }
+
+    private static void AddBasicAuthIfPresent(HttpRequestMessage request, Dictionary<string, string> connection)
+    {
+        var username = GetConnectionValue(connection, "username");
+        var password = GetConnectionValue(connection, "password", "device_key");
+        if (string.IsNullOrWhiteSpace(username) && string.IsNullOrWhiteSpace(password))
+        {
+            return;
+        }
+
+        var raw = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+        request.Headers.TryAddWithoutValidation("Authorization", $"Basic {raw}");
+    }
+
+    private static DeviceCommandResult ExecuteTasmotaCommand(Device device, string protocol, bool targetIsOn)
+    {
+        try
+        {
+            var url = BuildTasmotaCommandUrl(device.Connection, protocol, targetIsOn);
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            using var response = client.Send(request);
+            var safeUrl = RedactSensitiveText(url);
+            var message = $"Tasmota GET {safeUrl} -> {(int)response.StatusCode}";
+
+            return new DeviceCommandResult(
+                response.IsSuccessStatusCode,
+                response.IsSuccessStatusCode ? "connected" : "no_connection",
+                message);
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"Tasmota command timeout: {ex.Message}");
+        }
+        catch (TimeoutException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"Tasmota command timeout: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return new DeviceCommandResult(false, "no_connection", $"Не удалось выполнить команду Tasmota: {ex.Message}");
+        }
+    }
+
+    private static string BuildTasmotaCommandUrl(Dictionary<string, string> connection, string protocol, bool targetIsOn)
+    {
+        var command = targetIsOn ? "Power On" : "Power Off";
+        var commandConnection = new Dictionary<string, string>(connection, StringComparer.OrdinalIgnoreCase);
+        if (string.IsNullOrWhiteSpace(GetConnectionValue(commandConnection, "path")))
+        {
+            commandConnection["path"] = "/cm";
+        }
+        var url = BuildHttpUrl(commandConnection, protocol);
+        var parameters = new List<KeyValuePair<string, string>>();
+        var username = GetConnectionValue(commandConnection, "username");
+        var password = GetConnectionValue(commandConnection, "password", "device_key");
+        if (!string.IsNullOrWhiteSpace(username))
+        {
+            parameters.Add(new KeyValuePair<string, string>("user", username));
+        }
+        if (!string.IsNullOrWhiteSpace(password))
+        {
+            parameters.Add(new KeyValuePair<string, string>("password", password));
+        }
+        parameters.Add(new KeyValuePair<string, string>("cmnd", command));
+        return AppendQueryParameters(url, parameters);
+    }
+
+    private static string AppendQueryParameters(string url, IEnumerable<KeyValuePair<string, string>> parameters)
+    {
+        var builder = new StringBuilder(url);
+        var hasQuery = url.Contains('?', StringComparison.Ordinal);
+        foreach (var parameter in parameters)
+        {
+            if (string.IsNullOrWhiteSpace(parameter.Key) || string.IsNullOrWhiteSpace(parameter.Value))
+            {
+                continue;
+            }
+            builder.Append(hasQuery ? '&' : '?');
+            hasQuery = true;
+            builder.Append(Uri.EscapeDataString(parameter.Key));
+            builder.Append('=');
+            builder.Append(Uri.EscapeDataString(parameter.Value));
+        }
+        return builder.ToString();
     }
 
     private static DeviceCommandResult ExecuteHomeAssistantCommand(Device device, bool targetIsOn)
