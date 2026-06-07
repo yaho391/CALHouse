@@ -674,6 +674,12 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         EnsureRequiredConnectionFields(provider, protocol, connection);
         ValidateConnectionFields(provider, protocol, connection);
 
+        if (provider == "homeassistant")
+        {
+            var ok = TryHomeAssistantConnection(connection, out var message);
+            return new ConnectionValidationResult(ok, ok ? "connected" : "no_connection", message, connection);
+        }
+
         if (protocol is "http" or "https")
         {
             var ok = TryHttpConnection(connection, protocol, out var message);
@@ -768,6 +774,42 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         }
     }
 
+    private static bool TryHomeAssistantConnection(Dictionary<string, string> connection, out string message)
+    {
+        try
+        {
+            var entityId = GetConnectionValue(connection, "entity_id");
+            var token = GetConnectionValue(connection, "token");
+            var url = BuildHomeAssistantApiUrl(GetConnectionValue(connection, "url"), $"states/{Uri.EscapeDataString(entityId)}");
+
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+
+            using var response = client.Send(request);
+            message = response.IsSuccessStatusCode
+                ? $"Home Assistant entity найден ({(int)response.StatusCode})"
+                : $"Home Assistant entity недоступен ({(int)response.StatusCode})";
+            return response.IsSuccessStatusCode;
+        }
+        catch (TaskCanceledException ex)
+        {
+            message = $"Home Assistant timeout: {ex.Message}";
+            return false;
+        }
+        catch (TimeoutException ex)
+        {
+            message = $"Home Assistant timeout: {ex.Message}";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            message = $"Не удалось проверить Home Assistant: {ex.Message}";
+            return false;
+        }
+    }
+
     private static string BuildHttpUrl(Dictionary<string, string> connection, string protocol)
     {
         var direct = GetConnectionValue(connection, "url");
@@ -782,6 +824,15 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         var hostPart = string.IsNullOrWhiteSpace(port) ? host : $"{host}:{port}";
         var finalPath = string.IsNullOrWhiteSpace(path) ? string.Empty : (path.StartsWith('/') ? path : $"/{path}");
         return $"{protocol}://{hostPart}{finalPath}";
+    }
+
+    private static string BuildHomeAssistantApiUrl(string baseUrl, string apiPath)
+    {
+        var cleanBase = baseUrl.Trim().TrimEnd('/');
+        var cleanPath = apiPath.Trim().TrimStart('/');
+        return cleanBase.EndsWith("/api", StringComparison.OrdinalIgnoreCase)
+            ? $"{cleanBase}/{cleanPath}"
+            : $"{cleanBase}/api/{cleanPath}";
     }
 
     private static void EnsureRequiredConnectionFields(string provider, string protocol, Dictionary<string, string> connection)
@@ -1010,6 +1061,11 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             return ExecuteCustomHttpCommand(device, protocol, targetIsOn);
         }
 
+        if (provider == "homeassistant")
+        {
+            return ExecuteHomeAssistantCommand(device, targetIsOn);
+        }
+
         if (provider is "mock" or "demo" || protocol is "manual" or "demo")
         {
             return new DeviceCommandResult(true, "connected", "Локальное устройство переключено без сетевой команды");
@@ -1019,6 +1075,46 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             true,
             string.IsNullOrWhiteSpace(device.ConnectionStatus) ? "unknown" : device.ConnectionStatus,
             string.IsNullOrWhiteSpace(device.ConnectionMessage) ? "Состояние устройства обновлено локально" : device.ConnectionMessage);
+    }
+
+    private static DeviceCommandResult ExecuteHomeAssistantCommand(Device device, bool targetIsOn)
+    {
+        try
+        {
+            var entityId = GetConnectionValue(device.Connection, "entity_id");
+            var token = GetConnectionValue(device.Connection, "token");
+            var service = targetIsOn ? "turn_on" : "turn_off";
+            var url = BuildHomeAssistantApiUrl(GetConnectionValue(device.Connection, "url"), $"services/homeassistant/{service}");
+            var body = JsonSerializer.Serialize(new Dictionary<string, string>
+            {
+                ["entity_id"] = entityId,
+            });
+
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var request = new HttpRequestMessage(HttpMethod.Post, url);
+            request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
+            request.Headers.TryAddWithoutValidation("Accept", "application/json");
+            request.Content = new StringContent(body, Encoding.UTF8, "application/json");
+
+            using var response = client.Send(request);
+            var message = $"Home Assistant {service} {entityId} -> {(int)response.StatusCode}";
+            return new DeviceCommandResult(
+                response.IsSuccessStatusCode,
+                response.IsSuccessStatusCode ? "connected" : "no_connection",
+                message);
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"Home Assistant command timeout: {ex.Message}");
+        }
+        catch (TimeoutException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"Home Assistant command timeout: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return new DeviceCommandResult(false, "no_connection", $"Не удалось выполнить команду Home Assistant: {ex.Message}");
+        }
     }
 
     private static DeviceCommandResult ExecuteCustomHttpCommand(Device device, string protocol, bool targetIsOn)
