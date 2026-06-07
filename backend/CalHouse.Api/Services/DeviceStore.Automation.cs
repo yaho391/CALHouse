@@ -13,7 +13,7 @@ namespace CalHouse.Api.Services;
 public partial class DeviceStore
 {
     private static readonly string[] SupportedDeviceTypes = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Замок", "Штора", "Другое"];
-    private static readonly string[] SupportedProviders = ["mock", "demo", "shelly", "tasmota", "mqtt", "zigbee2mqtt", "homeassistant", "http", "camera", "custom"];
+    private static readonly string[] SupportedProviders = ["mock", "demo", "shelly", "tasmota", "mqtt", "zigbee2mqtt", "homeassistant", "http", "camera", "camera_rtsp", "custom"];
     private static readonly string[] SupportedProtocols = ["manual", "demo", "http", "https", "mqtt", "tcp", "rtsp"];
     private static readonly string[] SupportedRuleOperators = ["=", "!=", ">", ">=", "<", "<=", "contains"];
     private static readonly string[] SupportedActionKinds = ["device_state", "scene_run"];
@@ -680,6 +680,12 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             return new ConnectionValidationResult(ok, ok ? "connected" : "no_connection", message, connection);
         }
 
+        if (provider is "camera" or "camera_rtsp")
+        {
+            var ok = TryCameraConnection(connection, protocol, out var message);
+            return new ConnectionValidationResult(ok, ok ? "connected" : "no_connection", message, connection);
+        }
+
         if (protocol is "http" or "https")
         {
             var ok = TryHttpConnection(connection, protocol, out var message);
@@ -808,6 +814,150 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             message = $"Не удалось проверить Home Assistant: {ex.Message}";
             return false;
         }
+    }
+
+    private static bool TryCameraConnection(Dictionary<string, string> connection, string protocol, out string message)
+    {
+        var snapshotUrl = GetConnectionValue(connection, "snapshot_url");
+        if (!string.IsNullOrWhiteSpace(snapshotUrl))
+        {
+            return TryCameraSnapshotConnection(connection, snapshotUrl, out message);
+        }
+
+        return TryRtspConnection(connection, protocol, out message);
+    }
+
+    private static bool TryCameraSnapshotConnection(Dictionary<string, string> connection, string snapshotUrl, out string message)
+    {
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var request = new HttpRequestMessage(HttpMethod.Get, snapshotUrl);
+            AddBasicAuthIfPresent(request, connection);
+            using var response = client.Send(request);
+            var status = (int)response.StatusCode;
+            var ok = response.IsSuccessStatusCode || status == 401;
+            message = ok
+                ? $"Camera snapshot endpoint отвечает ({status})"
+                : $"Camera snapshot endpoint недоступен ({status})";
+            return ok;
+        }
+        catch (TaskCanceledException ex)
+        {
+            message = $"Camera snapshot timeout: {ex.Message}";
+            return false;
+        }
+        catch (TimeoutException ex)
+        {
+            message = $"Camera snapshot timeout: {ex.Message}";
+            return false;
+        }
+        catch (Exception ex)
+        {
+            message = $"Не удалось проверить snapshot камеры: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static bool TryRtspConnection(Dictionary<string, string> connection, string protocol, out string message)
+    {
+        var host = GetConnectionValue(connection, "host");
+        var port = ParsePort(GetConnectionValue(connection, "port"));
+        var url = BuildRtspUrl(connection, protocol);
+
+        try
+        {
+            using var client = new TcpClient();
+            client.ReceiveTimeout = 3000;
+            client.SendTimeout = 3000;
+            var connectTask = client.ConnectAsync(host, port);
+            if (Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) != 0)
+            {
+                message = "RTSP camera connection timeout";
+                return false;
+            }
+            if (connectTask.IsFaulted)
+            {
+                throw connectTask.Exception?.GetBaseException() ?? new SocketException();
+            }
+
+            using var stream = client.GetStream();
+            var request = BuildRtspOptionsRequest(url, connection);
+            var bytes = Encoding.ASCII.GetBytes(request);
+            stream.Write(bytes, 0, bytes.Length);
+
+            var buffer = new byte[1024];
+            var read = stream.Read(buffer, 0, buffer.Length);
+            if (read <= 0)
+            {
+                message = $"RTSP TCP port {port} доступен, но камера не вернула RTSP-ответ";
+                return true;
+            }
+
+            var response = Encoding.ASCII.GetString(buffer, 0, read);
+            if (!response.StartsWith("RTSP/", StringComparison.OrdinalIgnoreCase))
+            {
+                message = $"TCP port {port} доступен, но ответ не похож на RTSP";
+                return false;
+            }
+
+            var status = ParseRtspStatusCode(response);
+            var ok = status is >= 200 and < 500;
+            message = ok
+                ? $"RTSP камера отвечает ({status})"
+                : $"RTSP камера вернула ошибку ({status})";
+            return ok;
+        }
+        catch (IOException ex) when (ex.InnerException is SocketException socketException
+            && socketException.SocketErrorCode == SocketError.TimedOut)
+        {
+            message = $"RTSP TCP port {port} доступен, но камера не ответила на OPTIONS";
+            return true;
+        }
+        catch (Exception ex)
+        {
+            message = $"Не удалось проверить RTSP камеру: {ex.Message}";
+            return false;
+        }
+    }
+
+    private static string BuildRtspUrl(Dictionary<string, string> connection, string protocol)
+    {
+        var host = GetConnectionValue(connection, "host");
+        var port = GetConnectionValue(connection, "port");
+        var path = GetConnectionValue(connection, "path");
+        var finalProtocol = protocol == "rtsp" ? "rtsp" : "rtsp";
+        var hostPart = string.IsNullOrWhiteSpace(port) ? host : $"{host}:{port}";
+        var finalPath = string.IsNullOrWhiteSpace(path) ? string.Empty : (path.StartsWith('/') ? path : $"/{path}");
+        return $"{finalProtocol}://{hostPart}{finalPath}";
+    }
+
+    private static string BuildRtspOptionsRequest(string url, Dictionary<string, string> connection)
+    {
+        var builder = new StringBuilder();
+        builder.Append("OPTIONS ").Append(url).Append(" RTSP/1.0\r\n");
+        builder.Append("CSeq: 1\r\n");
+        builder.Append("User-Agent: CALHouse\r\n");
+
+        var username = GetConnectionValue(connection, "username");
+        var password = GetConnectionValue(connection, "password", "device_key");
+        if (!string.IsNullOrWhiteSpace(username) || !string.IsNullOrWhiteSpace(password))
+        {
+            var raw = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{username}:{password}"));
+            builder.Append("Authorization: Basic ").Append(raw).Append("\r\n");
+        }
+
+        builder.Append("\r\n");
+        return builder.ToString();
+    }
+
+    private static int ParseRtspStatusCode(string response)
+    {
+        var firstLine = response.Split(["\r\n", "\n"], StringSplitOptions.None).FirstOrDefault() ?? string.Empty;
+        var parts = firstLine.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        return parts.Length >= 2 && int.TryParse(parts[1], NumberStyles.None, CultureInfo.InvariantCulture, out var status)
+            ? status
+            : 0;
     }
 
     private static string BuildHttpUrl(Dictionary<string, string> connection, string protocol)
@@ -1076,6 +1226,11 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             return ExecuteShellyCommand(device, protocol, targetIsOn);
         }
 
+        if (provider is "mqtt" or "zigbee2mqtt" || protocol == "mqtt")
+        {
+            return ExecuteMqttCommand(device, provider, targetIsOn);
+        }
+
         if (provider is "mock" or "demo" || protocol is "manual" or "demo")
         {
             return new DeviceCommandResult(true, "connected", "Локальное устройство переключено без сетевой команды");
@@ -1085,6 +1240,253 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             true,
             string.IsNullOrWhiteSpace(device.ConnectionStatus) ? "unknown" : device.ConnectionStatus,
             string.IsNullOrWhiteSpace(device.ConnectionMessage) ? "Состояние устройства обновлено локально" : device.ConnectionMessage);
+    }
+
+    private static DeviceCommandResult ExecuteMqttCommand(Device device, string provider, bool targetIsOn)
+    {
+        try
+        {
+            var host = GetConnectionValue(device.Connection, "host");
+            var port = ParsePort(GetConnectionValue(device.Connection, "port"));
+            var topic = BuildMqttTopic(device.Connection, provider);
+            var payload = BuildMqttPayload(device.Connection, provider, targetIsOn);
+            var username = GetConnectionValue(device.Connection, "username");
+            var password = GetConnectionValue(device.Connection, "password", "device_key");
+            var clientId = GetConnectionValue(device.Connection, "client_id");
+            if (string.IsNullOrWhiteSpace(clientId))
+            {
+                clientId = $"calhouse-{Guid.NewGuid():N}"[..22];
+            }
+            var retain = ParseOptionalBoolean(GetConnectionValue(device.Connection, "retain"));
+
+            PublishMqtt(host, port, topic, payload, username, password, clientId, retain);
+            return new DeviceCommandResult(true, "connected", $"MQTT publish {host}:{port} topic={topic} payload={Shorten(payload, 80)}");
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"MQTT command timeout: {ex.Message}");
+        }
+        catch (TimeoutException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"MQTT command timeout: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return new DeviceCommandResult(false, "no_connection", $"MQTT command failed: {ex.Message}");
+        }
+    }
+
+    private static string BuildMqttTopic(Dictionary<string, string> connection, string provider)
+    {
+        var topic = GetConnectionValue(connection, "topic");
+        if (provider == "zigbee2mqtt" && !topic.EndsWith("/set", StringComparison.OrdinalIgnoreCase))
+        {
+            return $"{topic.TrimEnd('/')}/set";
+        }
+
+        return topic;
+    }
+
+    private static string BuildMqttPayload(Dictionary<string, string> connection, string provider, bool targetIsOn)
+    {
+        var template = GetConnectionValue(connection, "payload_template");
+        if (!string.IsNullOrWhiteSpace(template))
+        {
+            return RenderDeviceCommandTemplate(template, targetIsOn);
+        }
+
+        var payload = GetConnectionValue(connection, targetIsOn ? "payload_on" : "payload_off");
+        if (!string.IsNullOrWhiteSpace(payload))
+        {
+            return payload;
+        }
+
+        if (provider == "zigbee2mqtt")
+        {
+            return JsonSerializer.Serialize(new Dictionary<string, string>
+            {
+                ["state"] = targetIsOn ? "ON" : "OFF",
+            });
+        }
+
+        return targetIsOn ? "ON" : "OFF";
+    }
+
+    private static bool ParseOptionalBoolean(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return false;
+        }
+
+        var clean = value.Trim();
+        return clean.Equals("true", StringComparison.OrdinalIgnoreCase)
+            || clean.Equals("1", StringComparison.OrdinalIgnoreCase)
+            || clean.Equals("yes", StringComparison.OrdinalIgnoreCase)
+            || clean.Equals("on", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static void PublishMqtt(string host, int port, string topic, string payload, string username, string password, string clientId, bool retain)
+    {
+        using var client = new TcpClient();
+        client.ReceiveTimeout = 3000;
+        client.SendTimeout = 3000;
+
+        var connectTask = client.ConnectAsync(host, port);
+        if (Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) != 0)
+        {
+            throw new TimeoutException("MQTT broker did not accept TCP connection in 3 seconds");
+        }
+        if (connectTask.IsFaulted)
+        {
+            throw connectTask.Exception?.GetBaseException() ?? new SocketException();
+        }
+
+        using var stream = client.GetStream();
+        WriteMqttPacket(stream, BuildMqttConnectPacket(clientId, username, password));
+        var connackPayload = ReadMqttPacket(stream, out var packetType);
+        if (packetType != 0x20 || connackPayload.Length < 2 || connackPayload[1] != 0)
+        {
+            var code = connackPayload.Length >= 2 ? connackPayload[1].ToString(CultureInfo.InvariantCulture) : "unknown";
+            throw new InvalidOperationException($"MQTT broker rejected connection, code={code}");
+        }
+
+        WriteMqttPacket(stream, BuildMqttPublishPacket(topic, payload, retain));
+        WriteMqttPacket(stream, [0xE0, 0x00]);
+    }
+
+    private static byte[] BuildMqttConnectPacket(string clientId, string username, string password)
+    {
+        var variableHeader = new List<byte>();
+        WriteMqttString(variableHeader, "MQTT");
+        variableHeader.Add(4);
+
+        var flags = (byte)0x02;
+        var hasUsername = !string.IsNullOrWhiteSpace(username);
+        var hasPassword = !string.IsNullOrWhiteSpace(password);
+        if (hasPassword)
+        {
+            hasUsername = true;
+            flags |= 0x40;
+        }
+        if (hasUsername)
+        {
+            flags |= 0x80;
+        }
+        variableHeader.Add(flags);
+        variableHeader.Add(0);
+        variableHeader.Add(60);
+
+        var payload = new List<byte>();
+        WriteMqttString(payload, clientId);
+        if (hasUsername)
+        {
+            WriteMqttString(payload, username);
+        }
+        if (hasPassword)
+        {
+            WriteMqttString(payload, password);
+        }
+
+        var body = new List<byte>();
+        body.AddRange(variableHeader);
+        body.AddRange(payload);
+        return BuildMqttFixedPacket(0x10, body);
+    }
+
+    private static byte[] BuildMqttPublishPacket(string topic, string payload, bool retain)
+    {
+        var body = new List<byte>();
+        WriteMqttString(body, topic);
+        body.AddRange(Encoding.UTF8.GetBytes(payload));
+        return BuildMqttFixedPacket(retain ? (byte)0x31 : (byte)0x30, body);
+    }
+
+    private static byte[] BuildMqttFixedPacket(byte header, IReadOnlyCollection<byte> body)
+    {
+        var packet = new List<byte> { header };
+        WriteMqttRemainingLength(packet, body.Count);
+        packet.AddRange(body);
+        return [.. packet];
+    }
+
+    private static void WriteMqttString(List<byte> target, string value)
+    {
+        var bytes = Encoding.UTF8.GetBytes(value ?? string.Empty);
+        if (bytes.Length > ushort.MaxValue)
+        {
+            throw new ValidationProblemException("MQTT string is too long", "DEVICE_CONNECTION_MQTT_STRING_TOO_LONG");
+        }
+
+        target.Add((byte)(bytes.Length >> 8));
+        target.Add((byte)(bytes.Length & 0xFF));
+        target.AddRange(bytes);
+    }
+
+    private static void WriteMqttRemainingLength(List<byte> target, int length)
+    {
+        do
+        {
+            var encoded = length % 128;
+            length /= 128;
+            if (length > 0)
+            {
+                encoded |= 128;
+            }
+            target.Add((byte)encoded);
+        }
+        while (length > 0);
+    }
+
+    private static void WriteMqttPacket(NetworkStream stream, byte[] packet)
+    {
+        stream.Write(packet, 0, packet.Length);
+    }
+
+    private static byte[] ReadMqttPacket(NetworkStream stream, out int packetType)
+    {
+        var first = stream.ReadByte();
+        if (first < 0)
+        {
+            throw new InvalidOperationException("MQTT broker closed connection");
+        }
+
+        packetType = first & 0xF0;
+        var multiplier = 1;
+        var remainingLength = 0;
+        for (var i = 0; i < 4; i++)
+        {
+            var encoded = stream.ReadByte();
+            if (encoded < 0)
+            {
+                throw new InvalidOperationException("MQTT broker closed connection while reading packet length");
+            }
+
+            remainingLength += (encoded & 127) * multiplier;
+            if ((encoded & 128) == 0)
+            {
+                var payload = new byte[remainingLength];
+                ReadMqttBytes(stream, payload);
+                return payload;
+            }
+            multiplier *= 128;
+        }
+
+        throw new InvalidOperationException("Invalid MQTT remaining length");
+    }
+
+    private static void ReadMqttBytes(NetworkStream stream, byte[] buffer)
+    {
+        var offset = 0;
+        while (offset < buffer.Length)
+        {
+            var read = stream.Read(buffer, offset, buffer.Length - offset);
+            if (read <= 0)
+            {
+                throw new InvalidOperationException("MQTT broker closed connection while reading packet");
+            }
+            offset += read;
+        }
     }
 
     private static DeviceCommandResult ExecuteShellyCommand(Device device, string protocol, bool targetIsOn)

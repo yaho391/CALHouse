@@ -357,8 +357,8 @@ public sealed class DeviceCatalogService
                 SupportsCommands = true,
                 SupportsEvents = true,
                 RequiredFields = ["host", "port", "topic"],
-                OptionalFields = ["username", "password", "state_topic"],
-                FormFields = [HostField(), PortField("1883"), TopicField(), UsernameField(), PasswordField(), StateTopicField()],
+                OptionalFields = ["username", "password", "state_topic", "payload_on", "payload_off", "payload_template"],
+                FormFields = [HostField(), PortField("1883"), TopicField(), UsernameField(), PasswordField(), StateTopicField(), PayloadOnField(), PayloadOffField(), PayloadTemplateField()],
                 Note = "MQTT: укажи брокер, порт и topic устройства.",
             },
             new()
@@ -371,8 +371,8 @@ public sealed class DeviceCatalogService
                 SupportsCommands = true,
                 SupportsEvents = true,
                 RequiredFields = ["host", "port", "topic"],
-                OptionalFields = ["username", "password", "state_topic"],
-                FormFields = [HostField(), PortField("1883"), TopicField("Topic устройства"), StateTopicField(), UsernameField(), PasswordField()],
+                OptionalFields = ["username", "password", "state_topic", "payload_template"],
+                FormFields = [HostField(), PortField("1883"), TopicField("Topic устройства"), StateTopicField(), UsernameField(), PasswordField(), PayloadTemplateField()],
                 Note = "Zigbee2MQTT: укажи MQTT-брокер и topic Zigbee-устройства.",
             },
             new()
@@ -546,5 +546,7 @@ public sealed class DeviceCatalogService
     private static DeviceFormFieldDefinition HeadersField() => new() { Name = "headers", Label = "Заголовки JSON", Kind = "textarea" };
     private static DeviceFormFieldDefinition BodyTemplateField() => new() { Name = "body_template", Label = "Шаблон body", Kind = "textarea" };
     private static DeviceFormFieldDefinition SnapshotUrlField() => new() { Name = "snapshot_url", Label = "URL снимка", Kind = "url" };
+    private static DeviceFormFieldDefinition PayloadOnField() => new() { Name = "payload_on", Label = "Payload ON", Kind = "text", Placeholder = "ON" };
+    private static DeviceFormFieldDefinition PayloadOffField() => new() { Name = "payload_off", Label = "Payload OFF", Kind = "text", Placeholder = "OFF" };
     private static DeviceFormFieldDefinition PayloadTemplateField() => new() { Name = "payload_template", Label = "Шаблон payload", Kind = "textarea" };
 }
