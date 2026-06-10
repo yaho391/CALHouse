@@ -13,7 +13,7 @@ namespace CalHouse.Api.Services;
 public partial class DeviceStore
 {
     private static readonly string[] SupportedDeviceTypes = ["Свет", "Климат", "Камера", "Розетка", "Датчик", "Замок", "Штора", "Другое"];
-    private static readonly string[] SupportedProviders = ["mock", "demo", "shelly", "tasmota", "mqtt", "zigbee2mqtt", "homeassistant", "http", "camera", "camera_rtsp", "custom"];
+    private static readonly string[] SupportedProviders = ["mock", "demo", "shelly", "tasmota", "mqtt", "zigbee2mqtt", "homeassistant", "http", "camera", "camera_rtsp", "custom", "custom_tcp"];
     private static readonly string[] SupportedProtocols = ["manual", "demo", "http", "https", "mqtt", "tcp", "rtsp"];
     private static readonly string[] SupportedRuleOperators = ["=", "!=", ">", ">=", "<", "<=", "contains"];
     private static readonly string[] SupportedActionKinds = ["device_state", "scene_run"];
@@ -1231,6 +1231,11 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             return ExecuteMqttCommand(device, provider, targetIsOn);
         }
 
+        if (provider is "custom" or "custom_tcp" || protocol == "tcp")
+        {
+            return ExecuteCustomTcpCommand(device, targetIsOn);
+        }
+
         if (provider is "mock" or "demo" || protocol is "manual" or "demo")
         {
             return new DeviceCommandResult(true, "connected", "Локальное устройство переключено без сетевой команды");
@@ -1487,6 +1492,66 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             }
             offset += read;
         }
+    }
+
+    private static DeviceCommandResult ExecuteCustomTcpCommand(Device device, bool targetIsOn)
+    {
+        try
+        {
+            var host = GetConnectionValue(device.Connection, "host");
+            var port = ParsePort(GetConnectionValue(device.Connection, "port"));
+            var payload = BuildCustomTcpPayload(device.Connection, targetIsOn);
+            var bytes = Encoding.UTF8.GetBytes(payload);
+
+            using var client = new TcpClient();
+            client.SendTimeout = 3000;
+            client.ReceiveTimeout = 3000;
+
+            var connectTask = client.ConnectAsync(host, port);
+            if (Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) != 0)
+            {
+                return new DeviceCommandResult(false, "timeout", "TCP command timeout: device did not accept connection in 3 seconds");
+            }
+            if (connectTask.IsFaulted)
+            {
+                throw connectTask.Exception?.GetBaseException() ?? new SocketException();
+            }
+
+            using var stream = client.GetStream();
+            stream.Write(bytes, 0, bytes.Length);
+
+            return new DeviceCommandResult(true, "connected", $"TCP send {host}:{port} payload={Shorten(payload, 80)}");
+        }
+        catch (TaskCanceledException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"TCP command timeout: {ex.Message}");
+        }
+        catch (TimeoutException ex)
+        {
+            return new DeviceCommandResult(false, "timeout", $"TCP command timeout: {ex.Message}");
+        }
+        catch (Exception ex)
+        {
+            return new DeviceCommandResult(false, "no_connection", $"TCP command failed: {ex.Message}");
+        }
+    }
+
+    private static string BuildCustomTcpPayload(Dictionary<string, string> connection, bool targetIsOn)
+    {
+        var template = GetConnectionValue(connection, "payload_template");
+        var payload = string.IsNullOrWhiteSpace(template)
+            ? targetIsOn ? "ON" : "OFF"
+            : RenderDeviceCommandTemplate(template, targetIsOn);
+
+        return DecodeEscapedTcpPayload(payload);
+    }
+
+    private static string DecodeEscapedTcpPayload(string payload)
+    {
+        return payload
+            .Replace("\\r", "\r", StringComparison.Ordinal)
+            .Replace("\\n", "\n", StringComparison.Ordinal)
+            .Replace("\\t", "\t", StringComparison.Ordinal);
     }
 
     private static DeviceCommandResult ExecuteShellyCommand(Device device, string protocol, bool targetIsOn)
