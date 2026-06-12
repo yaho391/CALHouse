@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
 import flet as ft
 import asyncio
+import difflib
 import httpx
 import json
+import re
 from datetime import datetime
 from time import perf_counter
 from typing import Any
@@ -17,6 +19,8 @@ LIST_PAGE_SIZE = 25
 REFRESH_DEBOUNCE_SECONDS = 0.35
 TAB_FADE_MS = 180
 CARD_REVEAL_MS = 170
+ASSISTANT_HISTORY_LIMIT = 50
+ASSISTANT_MATCH_THRESHOLD = 0.58
 VISUAL_API_LOG_LIMIT = 8
 VISUAL_SCENE_LOG_LIMIT = 8
 VISUAL_AUTOMATION_LOG_LIMIT = 8
@@ -382,6 +386,9 @@ async def main(page: ft.Page):
         "demo_presentation_errors": {},
         "demo_presentation_hint": "",
         "demo_presentation_highlight": None,
+        "assistant_messages": [],
+        "assistant_persona": "jarvis",
+        "assistant_busy": False,
     }
     api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
 
@@ -980,8 +987,9 @@ async def main(page: ft.Page):
             4: ("rules", "logs"),
             5: ("schedules", "logs"),
             6: ("rooms", "devices"),
-            7: ("logs",),
-            8: ("users",),
+            7: ("devices", "rooms", "scenes", "logs"),
+            8: ("logs",),
+            9: ("users",),
         }
         return sections_by_tab.get(int(state.get("tab", 0) or 0), ("devices", "rooms", "logs"))
 
@@ -4405,6 +4413,7 @@ async def main(page: ft.Page):
         state["login"] = result.get("login", "")
         state["role"] = result.get("role", "User")
         state["tab"] = 0
+        reset_assistant_history("jarvis")
         clear_data()
         if isinstance(state.get("loading_sections"), set):
             state["loading_sections"].update(current_tab_sections())
@@ -4471,6 +4480,9 @@ async def main(page: ft.Page):
             state["demo_presentation_errors"].clear()
         state["demo_presentation_hint"] = ""
         state["demo_presentation_highlight"] = None
+        reset_assistant_history("jarvis")
+        if isinstance(state.get("assistant_messages"), list):
+            state["assistant_messages"].clear()
         clear_data()
         build()
         show_message("Выход выполнен")
@@ -4852,6 +4864,526 @@ async def main(page: ft.Page):
             ),
         )
 
+    ASSISTANT_DEVICE_ACTION_WORDS = {
+        "включи", "включить", "вкл", "вклчи", "влючи", "зажги", "вруби", "активируй",
+        "выключи", "выключить", "выкл", "отключи", "отключить", "погаси", "выруби", "деактивируй",
+        "статус", "состояние", "работает",
+    }
+    ASSISTANT_STOP_WORDS = {
+        "пожалуйста", "можешь", "можно", "нужно", "надо", "давай", "сделай", "у", "в", "во",
+        "на", "по", "для", "и", "или", "а", "теперь", "мне", "мой", "моя", "мою", "его", "ее", "её",
+        *ASSISTANT_DEVICE_ACTION_WORDS,
+    }
+
+    def assistant_welcome_text(persona: str | None = None) -> str:
+        persona = persona or str(state.get("assistant_persona") or "jarvis")
+        if persona == "glados":
+            return "Ассистент GLaDOS активен. Команды принимаются."
+        if persona == "siri":
+            return "Привет. Я готова помочь с устройствами, сценариями и историей."
+        return "Здравствуйте, сэр. Я готов к вашим распоряжениям."
+
+    def assistant_history() -> list[dict[str, str]]:
+        messages = state.get("assistant_messages")
+        if not isinstance(messages, list):
+            messages = []
+            state["assistant_messages"] = messages
+        if not messages:
+            messages.append(
+                {
+                    "sender": "assistant",
+                    "text": assistant_welcome_text(),
+                    "timestamp": datetime.now().strftime("%H:%M"),
+                }
+            )
+        return messages
+
+    def add_assistant_message(sender: str, text: str):
+        messages = assistant_history()
+        messages.append(
+            {
+                "sender": sender,
+                "text": str(text or "").strip(),
+                "timestamp": datetime.now().strftime("%H:%M"),
+            }
+        )
+        if len(messages) > ASSISTANT_HISTORY_LIMIT:
+            del messages[:-ASSISTANT_HISTORY_LIMIT]
+
+    def reset_assistant_history(persona: str = "jarvis"):
+        state["assistant_persona"] = persona
+        state["assistant_busy"] = False
+        state["assistant_messages"] = [
+            {
+                "sender": "assistant",
+                "text": assistant_welcome_text(persona),
+                "timestamp": datetime.now().strftime("%H:%M"),
+            }
+        ]
+
+    def assistant_safe_update(*controls: ft.Control):
+        for control in controls:
+            try:
+                if getattr(control, "page", None):
+                    control.update()
+            except Exception:
+                pass
+
+    def normalize_assistant_text(value: Any) -> str:
+        text = str(value or "").lower().replace("ё", "е")
+        text = re.sub(r"[^0-9a-zа-я_. -]+", " ", text)
+        return " ".join(text.split())
+
+    def assistant_command_terms(command: str) -> str:
+        words = [
+            word
+            for word in normalize_assistant_text(command).split()
+            if word not in ASSISTANT_STOP_WORDS and len(word) > 1
+        ]
+        return " ".join(words)
+
+    def assistant_has_any(command: str, variants: tuple[str, ...] | list[str] | set[str]) -> bool:
+        normalized = normalize_assistant_text(command)
+        words = normalized.split()
+        for item in variants:
+            marker = normalize_assistant_text(item)
+            if not marker:
+                continue
+            if " " in marker:
+                if marker in normalized:
+                    return True
+                marker_words = marker.split()
+                for index in range(0, max(0, len(words) - len(marker_words)) + 1):
+                    window = " ".join(words[index:index + len(marker_words)])
+                    if difflib.SequenceMatcher(None, window, marker).ratio() >= 0.82:
+                        return True
+                continue
+            for word in words:
+                if word == marker:
+                    return True
+                if len(marker) >= 5 and (word.startswith(marker) or marker in word):
+                    return True
+                if len(marker) >= 4 and difflib.SequenceMatcher(None, word, marker).ratio() >= 0.82:
+                    return True
+        return False
+
+    def assistant_has_command_word(command: str, variants: tuple[str, ...] | list[str] | set[str]) -> bool:
+        normalized = normalize_assistant_text(command)
+        words = set(normalized.split())
+        for item in variants:
+            marker = normalize_assistant_text(item)
+            if not marker:
+                continue
+            if " " in marker:
+                if marker in normalized:
+                    return True
+                continue
+            if marker in words:
+                return True
+        return False
+
+    def assistant_match_named_item(command: str, items: list[dict[str, Any]], name_key: str = "name") -> dict[str, Any] | None:
+        normalized_command = normalize_assistant_text(command)
+        target = assistant_command_terms(command) or normalized_command
+        best_item: dict[str, Any] | None = None
+        best_score = 0.0
+
+        for item in items:
+            name = normalize_assistant_text(item.get(name_key))
+            if not name:
+                continue
+            score = 1.0 if name in normalized_command else difflib.SequenceMatcher(None, target, name).ratio()
+            target_words = target.split()
+            name_words_count = max(1, len(name.split()))
+            for size in range(max(1, name_words_count - 1), min(len(target_words), name_words_count + 2) + 1):
+                for index in range(0, len(target_words) - size + 1):
+                    window = " ".join(target_words[index:index + size])
+                    score = max(score, difflib.SequenceMatcher(None, window, name).ratio())
+            if score > best_score:
+                best_score = score
+                best_item = item
+
+        return best_item if best_score >= ASSISTANT_MATCH_THRESHOLD else None
+
+    def assistant_match_room(command: str) -> dict[str, Any] | None:
+        return assistant_match_named_item(command, data.get("rooms", []))
+
+    def assistant_match_device(command: str) -> dict[str, Any] | None:
+        direct = assistant_match_named_item(command, data.get("devices", []))
+        if direct:
+            return direct
+
+        room = assistant_match_room(command)
+        if not room:
+            return None
+        room_id = room.get("id")
+        room_devices = [device for device in data.get("devices", []) if device.get("roomId") == room_id]
+        normalized = normalize_assistant_text(command)
+        preferred_types: set[str] = set()
+        if any(word in normalized for word in ("свет", "ламп", "люстр")):
+            preferred_types.add("light")
+        if any(word in normalized for word in ("розет", "питани")):
+            preferred_types.add("socket")
+        if "реле" in normalized:
+            preferred_types.add("relay")
+
+        candidates = [
+            device
+            for device in room_devices
+            if device_can_receive_commands(device)
+            and (not preferred_types or device_type_code(device.get("type")) in preferred_types)
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+        return assistant_match_named_item(command, candidates)
+
+    async def assistant_set_device_state(device: dict[str, Any], target_is_on: bool) -> bool:
+        if not device_can_receive_commands(device):
+            raise RuntimeError(f"Устройство «{device.get('name', 'Устройство')}» не поддерживает включение и выключение")
+        if bool(device.get("isOn")) == target_is_on:
+            return False
+
+        result = await api_request("put", f"/api/devices/{int(device['id'])}/toggle")
+        if isinstance(result, dict):
+            device.update(result)
+        await refresh_sections("devices", "logs")
+        return True
+
+    async def assistant_run_scene(scene: dict[str, Any]):
+        await api_request("post", f"/api/scenes/{int(scene['id'])}/run")
+        await refresh_sections("devices", "scenes", "logs")
+
+    def assistant_device_suggestions(limit: int = 4) -> str:
+        names = [str(device.get("name")) for device in data.get("devices", []) if device.get("name")]
+        return ", ".join(names[:limit])
+
+    def assistant_is_loading(section: str) -> bool:
+        loading = state.get("loading_sections")
+        return bool(isinstance(loading, set) and section in loading)
+
+    def build_chat_bubble(sender: str, text: str, time: str, persona: str) -> ft.Control:
+        is_user = sender == "user"
+        if is_user:
+            icon_control = ft.Container(
+                content=ft.Icon(ft.Icons.PERSON, color=c("bg"), size=16),
+                bgcolor=c("text"),
+                width=28,
+                height=28,
+                border_radius=14,
+                alignment=ft.Alignment(0, 0),
+            )
+            bubble_color = c("accent")
+            text_color = "#000000" if not state["dark"] else c("bg")
+            align = ft.MainAxisAlignment.END
+            col_align = ft.CrossAxisAlignment.END
+        else:
+            if persona == "jarvis":
+                p_icon = ft.Icons.SHIELD
+                p_color = c("accent")
+            elif persona == "glados":
+                p_icon = ft.Icons.CENTER_FOCUS_STRONG
+                p_color = ft.Colors.ORANGE
+            else:
+                p_icon = ft.Icons.MIC_NONE
+                p_color = ft.Colors.PURPLE
+                
+            icon_control = ft.Container(
+                content=ft.Icon(p_icon, color=p_color, size=16),
+                bgcolor=c("field"),
+                border=ft.border.all(1, c("border")),
+                width=28,
+                height=28,
+                border_radius=14,
+                alignment=ft.Alignment(0, 0),
+            )
+            bubble_color = c("card")
+            text_color = c("text")
+            align = ft.MainAxisAlignment.START
+            col_align = ft.CrossAxisAlignment.START
+
+        longest_line = max((len(line) for line in str(text or "").splitlines()), default=12)
+        bubble_width = min(520, max(180, longest_line * 7 + 36))
+
+        return ft.Row(
+            alignment=align,
+            vertical_alignment=ft.CrossAxisAlignment.START,
+            controls=[
+                *([icon_control] if not is_user else []),
+                ft.Container(
+                    content=ft.Column(
+                        spacing=4,
+                        horizontal_alignment=col_align,
+                        controls=[
+                            ft.Text(text, color=text_color, size=14, no_wrap=False, overflow=ft.TextOverflow.VISIBLE, selectable=True),
+                            ft.Text(time, color=text_color, opacity=0.6, size=10),
+                        ]
+                    ),
+                    bgcolor=bubble_color,
+                    border_radius=12,
+                    padding=ft.padding.all(12),
+                    width=bubble_width,
+                ),
+                *([icon_control] if is_user else []),
+            ]
+        )
+
+    async def process_assistant_command(command: str, persona: str) -> str:
+        import random
+
+        text = str(command or "").strip()
+        normalized = normalize_assistant_text(text)
+        if not normalized:
+            return "Напишите команду, например: «включи лампу на кухне» или «покажи последние события»."
+
+        if assistant_has_any(normalized, ("помощь", "что умеешь", "команды", "пример")):
+            return (
+                "Я пока работаю как локальный помощник CALHouse и понимаю базовые команды:\n"
+                "- включи / выключи устройство;\n"
+                "- зажги свет в комнате;\n"
+                "- запусти сценарий;\n"
+                "- покажи последние события;\n"
+                "- какая температура.\n\n"
+                "Можно писать не идеально: я попробую найти похожее устройство или сценарий."
+            )
+
+        if assistant_has_any(normalized, ("анекдот", "пошути", "шутк")):
+            jokes = [
+                "Собрал умный дом. Теперь, чтобы выключить свет, я сначала проверяю backend, потом Wi-Fi, потом себя.",
+                "Умная розетка сказала: «Я не выключена, я в энергосберегающей философии».",
+                "Админ умного дома поставил правило: если всё работает, ничего не трогать. Правило сработало один раз и стало главным.",
+            ]
+            return random.choice(jokes)
+
+        if assistant_has_any(normalized, ("логи", "история", "что произошло", "событи", "журнал")):
+            recent = data.get("logs", [])[:3]
+            if not recent:
+                return "История ещё загружается." if assistant_is_loading("logs") else "В истории пока нет записей."
+            lines = [
+                f"- [{fmt_dt(log.get('ts'))}] {log.get('message', 'Событие')} ({log.get('source', 'api')})"
+                for log in recent
+            ]
+            return "Последние события:\n" + "\n".join(lines)
+
+        if assistant_has_any(normalized, ("температур", "градус", "тепло", "холодно")):
+            if not data.get("devices") and assistant_is_loading("devices"):
+                return "Данные устройств ещё загружаются. Повторите команду через пару секунд."
+            temp_reports = []
+            for device in data.get("devices", []):
+                if device_type_code(device.get("type")) == "temperature_sensor":
+                    val_dict = visual_sensor_state(device)
+                    temp = val_dict.get("temperature")
+                    if temp is None:
+                        connection = device.get("connection") or {}
+                        try:
+                            temp = int(float(str(connection.get("temperature", 24)).replace(",", ".")))
+                        except Exception:
+                            temp = 24
+                    temp_reports.append(f"- {device.get('name', 'Датчик температуры')}: {temp}°C")
+            return "Датчики температуры не найдены." if not temp_reports else "Температура:\n" + "\n".join(temp_reports)
+
+        scene_requested = assistant_has_command_word(normalized, ("запусти", "запустить", "активируй", "активировать")) or assistant_has_any(normalized, ("сценари", "режим"))
+        if scene_requested:
+            if not data.get("scenes") and assistant_is_loading("scenes"):
+                return "Сценарии ещё загружаются. Повторите команду через пару секунд."
+            scene = assistant_match_named_item(text, data.get("scenes", []))
+            if scene:
+                try:
+                    await assistant_run_scene(scene)
+                    return f"Сценарий «{scene.get('name', 'Сценарий')}» запущен."
+                except Exception as ex:
+                    return f"Не удалось запустить сценарий: {error_message(ex)}"
+            if "сценари" in normalized or "режим" in normalized:
+                return "Не нашёл подходящий сценарий. Уточните название сценария."
+
+        turn_on = assistant_has_command_word(normalized, ("включи", "включите", "включить", "вкл", "вклчи", "влючи", "зажги", "зажечь", "вруби", "активируй"))
+        turn_off = assistant_has_command_word(normalized, ("выключи", "выключите", "выключить", "выкл", "отключи", "отключите", "отключить", "погаси", "выруби", "деактивируй"))
+        wants_status = assistant_has_command_word(normalized, ("статус", "состояние", "работает")) or assistant_has_any(normalized, ("что с",))
+
+        if turn_on or turn_off or wants_status:
+            if not data.get("devices") and assistant_is_loading("devices"):
+                return "Данные устройств ещё загружаются. Повторите команду через пару секунд."
+            device = assistant_match_device(text)
+            if not device:
+                suggestions = assistant_device_suggestions()
+                suffix = f" Доступные варианты: {suggestions}." if suggestions else ""
+                return f"Не нашёл подходящее устройство.{suffix}"
+
+            device_name = str(device.get("name", "Устройство"))
+            if wants_status and not (turn_on or turn_off):
+                state_text = "включено" if device.get("isOn") else "выключено"
+                connection = provider_title(device.get("provider"))
+                return f"Устройство «{device_name}»: {state_text}. Provider: {connection}."
+
+            target = True if turn_on else False
+            try:
+                changed = await assistant_set_device_state(device, target)
+            except Exception as ex:
+                return f"Не удалось изменить состояние устройства «{device_name}»: {error_message(ex)}"
+
+            action_text = "включено" if target else "выключено"
+            if not changed:
+                return f"Устройство «{device_name}» уже {action_text}."
+            return f"Готово. Устройство «{device_name}» {action_text}."
+
+        return (
+            "Я пока не понял команду. Попробуйте так: "
+            "«включи лампу», «выключи розетку», «запусти вечерний режим», «покажи историю»."
+        )
+
+    def assistant_view() -> ft.Control:
+        messages_list = ft.ListView(
+            expand=True,
+            spacing=10,
+            auto_scroll=True,
+        )
+
+        def load_chat_history():
+            messages_list.controls.clear()
+            for msg in assistant_history():
+                messages_list.controls.append(
+                    build_chat_bubble(
+                        str(msg.get("sender", "assistant")),
+                        str(msg.get("text", "")),
+                        str(msg.get("timestamp", "")),
+                        state.get("assistant_persona", "jarvis")
+                    )
+                )
+            assistant_safe_update(messages_list)
+
+        load_chat_history()
+
+        typing_indicator = ft.Row(
+            spacing=6,
+            visible=False,
+            controls=[
+                ft.ProgressRing(width=12, height=12, stroke_width=2),
+                ft.Text("Ассистент печатает...", size=12, italic=True, color=c("text")),
+            ]
+        )
+
+        input_tf = field(
+            hint_text="Введите команду ассистенту...",
+            expand=True,
+        )
+        send_btn = ft.IconButton(icon=ft.Icons.SEND, icon_color=c("accent"), tooltip="Отправить")
+
+        def set_assistant_busy(value: bool):
+            state["assistant_busy"] = value
+            input_tf.disabled = value
+            send_btn.disabled = value
+            typing_indicator.visible = value
+            try:
+                current = state.get("assistant_persona", "jarvis")
+                for name, btn in persona_buttons.items():
+                    btn.disabled = value or name == current
+                assistant_safe_update(*persona_buttons.values())
+            except NameError:
+                pass
+            assistant_safe_update(input_tf, send_btn, typing_indicator)
+
+        async def send_message(e):
+            if state.get("assistant_busy"):
+                return
+            text = str(input_tf.value or "").strip()
+            if not text:
+                return
+
+            input_tf.value = ""
+            add_assistant_message("user", text)
+            load_chat_history()
+            set_assistant_busy(True)
+
+            try:
+                await asyncio.sleep(0.12)
+                persona = str(state.get("assistant_persona", "jarvis"))
+                reply = await process_assistant_command(text, persona)
+            except Exception as ex:
+                print("[assistant:error]", repr(ex), flush=True)
+                reply = "Не удалось обработать команду из-за внутренней ошибки ассистента. Попробуйте сформулировать проще."
+            finally:
+                set_assistant_busy(False)
+
+            add_assistant_message("assistant", reply)
+            load_chat_history()
+
+        input_tf.on_submit = async_click(send_message)
+        send_btn.on_click = async_click(send_message)
+
+        def set_persona(persona_name: str):
+            if state.get("assistant_busy"):
+                return
+            state["assistant_persona"] = persona_name
+            add_assistant_message("assistant", assistant_welcome_text(persona_name))
+            load_chat_history()
+            update_persona_buttons()
+
+        persona_buttons = {}
+
+        def make_persona_btn(name: str, label: str, icon: Any, color: Any):
+            def on_click(e):
+                set_persona(name)
+
+            btn = ft.OutlinedButton(
+                label,
+                icon=icon,
+                icon_color=color,
+                on_click=on_click,
+                height=40,
+            )
+            persona_buttons[name] = btn
+            return btn
+
+        jarvis_btn = make_persona_btn("jarvis", "Джарвис", ft.Icons.SHIELD, c("accent"))
+        glados_btn = make_persona_btn("glados", "GLaDOS", ft.Icons.CENTER_FOCUS_STRONG, ft.Colors.ORANGE)
+        siri_btn = make_persona_btn("siri", "Siri", ft.Icons.MIC_NONE, ft.Colors.PURPLE)
+        
+        def update_persona_buttons():
+            curr = state.get("assistant_persona", "jarvis")
+            for name, btn in persona_buttons.items():
+                btn.disabled = bool(state.get("assistant_busy")) or name == curr
+                assistant_safe_update(btn)
+
+        update_persona_buttons()
+
+        persona_row = ft.Row(
+            spacing=10,
+            controls=[jarvis_btn, glados_btn, siri_btn],
+            alignment=ft.MainAxisAlignment.START,
+            wrap=True,
+        )
+
+        return ft.Column(
+            expand=True,
+            spacing=14,
+            controls=[
+                ft.Column(
+                    spacing=4,
+                    controls=[
+                        T("Умный ассистент", size=22, weight=ft.FontWeight.BOLD),
+                        TM("Управляйте устройствами и сценариями с помощью естественного языка"),
+                    ]
+                ),
+                persona_row,
+                ft.Container(
+                    content=messages_list,
+                    expand=True,
+                    bgcolor=c("field"),
+                    border=ft.border.all(1, c("border")),
+                    border_radius=16,
+                    padding=16,
+                ),
+                typing_indicator,
+                ft.Row(
+                    spacing=10,
+                    vertical_alignment=ft.CrossAxisAlignment.CENTER,
+                    controls=[
+                        input_tf,
+                        send_btn,
+                    ]
+                )
+            ]
+        )
+
     def settings_view() -> ft.Control:
         dark_sw = ft.Switch(label="Темная тема", value=state["dark"])
 
@@ -4884,6 +5416,7 @@ async def main(page: ft.Page):
             ft.NavigationBarDestination(icon=ft.Icons.RULE, selected_icon=ft.Icons.RULE, label="Правила"),
             ft.NavigationBarDestination(icon=ft.Icons.SCHEDULE, selected_icon=ft.Icons.SCHEDULE, label="Расписание"),
             ft.NavigationBarDestination(icon=ft.Icons.HOME_WORK_OUTLINED, selected_icon=ft.Icons.ADD_HOME, label="Визуализация"),
+            ft.NavigationBarDestination(icon=ft.Icons.CHAT_BUBBLE_OUTLINE, selected_icon=ft.Icons.CHAT_BUBBLE, label="Ассистент"),
             ft.NavigationBarDestination(icon=ft.Icons.HISTORY_OUTLINED, selected_icon=ft.Icons.HISTORY, label="История"),
             ft.NavigationBarDestination(icon=ft.Icons.SETTINGS_OUTLINED, selected_icon=ft.Icons.SETTINGS, label="Настройки"),
         ],
@@ -4907,8 +5440,9 @@ async def main(page: ft.Page):
             4: rules_view,
             5: schedules_view,
             6: visualization_view,
-            7: history_view,
-            8: settings_view,
+            7: assistant_view,
+            8: history_view,
+            9: settings_view,
         }
         return views.get(state["tab"], home_view)()
 
