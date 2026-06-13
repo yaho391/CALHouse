@@ -1012,16 +1012,9 @@ async def main(page: ft.Page):
 
         refreshing_keys.add(key)
         last_refresh_started[key] = loop_time
-        loading_sections = state.get("loading_sections")
-        if not isinstance(loading_sections, set):
-            loading_sections = set()
-            state["loading_sections"] = loading_sections
-        loading_sections.update(target_sections)
-        render_current_view()
         try:
             await refresh_sections(*target_sections, show_toast=show_toast)
         finally:
-            loading_sections.difference_update(target_sections)
             refreshing_keys.discard(key)
         render_current_view()
 
@@ -1808,6 +1801,7 @@ async def main(page: ft.Page):
             if cached is not None and isinstance(result, dict):
                 cached.update(result)
                 update_device_card_controls(cached, status_control, power_control, message_control)
+            await refresh_sections("logs")
         except Exception:
             if cached is not None and old_snapshot is not None:
                 cached.clear()

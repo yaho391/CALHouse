@@ -33,15 +33,6 @@ public partial class DeviceStore
 
             using var transaction = db.BeginTransaction();
             MarkDeviceCommandPending(db, transaction, current, $"Toggle accepted: {(targetIsOn ? "ON" : "OFF")}");
-            LogEvent(
-                db,
-                transaction,
-                "info",
-                "api",
-                "DEVICE_COMMAND_ACCEPTED",
-                $"Command accepted for device \"{current.Name}\": {(targetIsOn ? "ON" : "OFF")}",
-                deviceId: current.Id,
-                roomId: current.RoomId);
             transaction.Commit();
 
             SyncLegacyDevicesJson(db);
@@ -61,7 +52,7 @@ public partial class DeviceStore
     {
         var provider = _catalog.NormalizeProviderCode(device.Provider);
         var protocol = NormalizeOptional(device.Protocol, _catalog.InferProtocol(provider)).ToLowerInvariant();
-        return provider == "demo" || protocol == "demo";
+        return provider is "mock" or "demo" || protocol is "manual" or "demo";
     }
 
     public SceneRun QueueSceneRun(int id, DeviceCommandQueue queue)
@@ -83,7 +74,6 @@ public partial class DeviceStore
             using var transaction = db.BeginTransaction();
             runId = CreatePendingSceneRun(db, transaction, scene, "Scene run accepted");
             UpdateSceneRunState(db, transaction, scene.Id, DateTime.UtcNow, "pending", "Scene run accepted");
-            LogEvent(db, transaction, "info", "api", "SCENE_RUN_ACCEPTED", $"Scene \"{scene.Name}\" accepted for background execution", sceneId: scene.Id, runId: runId);
             transaction.Commit();
 
             queuedRun = ReadSceneRunOrThrow(db, runId);
@@ -130,16 +120,6 @@ public partial class DeviceStore
             {
                 var run = CreatePendingScheduleRun(db, transaction, schedule, slot, "Schedule accepted");
                 UpdateScheduleRunState(db, transaction, schedule.Id, slot, "pending", "Schedule accepted");
-                LogEvent(
-                    db,
-                    transaction,
-                    "info",
-                    "scheduler",
-                    "SCHEDULE_COMMAND_ACCEPTED",
-                    $"Schedule \"{schedule.Name}\" accepted for background execution",
-                    deviceId: schedule.ActionDeviceId,
-                    sceneId: schedule.ActionSceneId,
-                    runId: run.Id);
                 result.Runs.Add(run);
                 queuedRuns.Add((schedule.Id, run.Id, slot));
             }
@@ -215,7 +195,6 @@ public partial class DeviceStore
                 }
 
                 var run = CreatePendingRuleRun(db, transaction, rule, sourceDevice, cleanEventType, cleanValue, "Rule accepted");
-                LogEvent(db, transaction, "info", "rule-engine", "RULE_TRIGGER_ACCEPTED", $"Rule \"{rule.Name}\" accepted for background execution", deviceId: sourceDevice.Id, sceneId: rule.ActionSceneId, runId: run.Id);
                 triggered.Add(run);
                 queuedRuns.Add((rule.Id, run.Id));
             }

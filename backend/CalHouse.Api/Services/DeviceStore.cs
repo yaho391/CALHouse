@@ -19,6 +19,8 @@ public partial class DeviceStore
     private const int MaxExternalIdLength = 100;
     private const int MaxEventValueLength = 500;
     private const int MaxConnectionTextLength = 8000;
+    private const int DeviceNetworkTimeoutMilliseconds = 3000;
+    private static readonly TimeSpan DeviceNetworkTimeout = TimeSpan.FromMilliseconds(DeviceNetworkTimeoutMilliseconds);
 
     private static readonly Regex SafeTextPattern = new(@"^[\p{L}\p{N} _.\-]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
     private static readonly Regex ExternalIdPattern = new(@"^[A-Za-z0-9._\-]+$", RegexOptions.Compiled | RegexOptions.CultureInvariant);
