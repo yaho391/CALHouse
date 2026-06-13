@@ -1038,6 +1038,8 @@ async def main(page: ft.Page):
         control = getattr(e, "control", None)
         old_disabled = getattr(control, "disabled", None) if control is not None else None
         old_text = getattr(control, "text", None) if control is not None and hasattr(control, "text") else None
+        old_content = getattr(control, "content", None) if control is not None and hasattr(control, "content") else None
+        old_content_value = getattr(old_content, "value", None) if hasattr(old_content, "value") else None
         if control is not None and old_disabled is True:
             return
         try:
@@ -1046,10 +1048,19 @@ async def main(page: ft.Page):
                     control.disabled = True
                 if old_text is not None:
                     control.text = busy_text
+                elif isinstance(old_content, str):
+                    control.content = busy_text
+                elif old_content_value is not None:
+                    old_content.value = busy_text
                 try:
                     control.update()
                 except Exception:
+                    pass
+                try:
                     page.update()
+                except Exception:
+                    pass
+                await asyncio.sleep(0)
             result = action()
             if asyncio.iscoroutine(result):
                 return await result
@@ -1062,10 +1073,18 @@ async def main(page: ft.Page):
                     control.disabled = old_disabled
                 if old_text is not None:
                     control.text = old_text
+                elif isinstance(old_content, str) and hasattr(control, "content"):
+                    control.content = old_content
+                elif old_content_value is not None and hasattr(old_content, "value"):
+                    old_content.value = old_content_value
                 try:
                     control.update()
                 except Exception:
+                    pass
+                try:
                     page.update()
+                except Exception:
+                    pass
 
     def device_type_defs() -> list[dict[str, Any]]:
         items = data["catalog"].get("deviceTypes") or DEFAULT_DEVICE_TYPES
@@ -2763,7 +2782,7 @@ async def main(page: ft.Page):
                             scenario["name"],
                             icon=scenario["icon"],
                             disabled=scenario["id"] in pending_set,
-                            on_click=async_click(lambda e, scenario_id=scenario["id"]: trigger_visual_scenario(str(scenario_id))),
+                            on_click=async_click(lambda e, scenario_id=scenario["id"]: run_button_action(e, lambda: trigger_visual_scenario(str(scenario_id)))),
                         )
                         for scenario in VISUAL_SCENARIOS
                     ],
@@ -3097,7 +3116,7 @@ async def main(page: ft.Page):
                 controls=[
                     *visual_device_header(config, device, "icon_on" if detected else "icon", icon_color),
                     TM(config["status_on"] if detected else config["status_off"], size=12),
-                    ft.OutlinedButton("Сымитировать движение", width=176, disabled=is_pending, on_click=async_click(simulate_motion)),
+                    ft.OutlinedButton("Сымитировать движение", width=176, disabled=is_pending, on_click=async_click(lambda e: run_button_action(e, lambda: simulate_motion(e)))),
                     *([visual_pending_row("Отправка события...")] if is_pending else []),
                 ],
             ),
@@ -3138,8 +3157,8 @@ async def main(page: ft.Page):
                         alignment=ft.MainAxisAlignment.CENTER,
                         spacing=8,
                         controls=[
-                            ft.OutlinedButton("-1 °C", disabled=is_pending, on_click=async_click(lambda e: change_temperature(-1))),
-                            ft.OutlinedButton("+1 °C", disabled=is_pending, on_click=async_click(lambda e: change_temperature(1))),
+                            ft.OutlinedButton("-1 °C", disabled=is_pending, on_click=async_click(lambda e: run_button_action(e, lambda: change_temperature(-1)))),
+                            ft.OutlinedButton("+1 °C", disabled=is_pending, on_click=async_click(lambda e: run_button_action(e, lambda: change_temperature(1)))),
                         ],
                     ),
                     *([visual_pending_row("Отправка события...")] if is_pending else []),
@@ -3176,8 +3195,8 @@ async def main(page: ft.Page):
                 controls=[
                     *visual_device_header(config, device, "icon_on" if leak else "icon", icon_color),
                     TM(config["status_on"] if leak else config["status_off"], size=12),
-                    ft.OutlinedButton("Сымитировать протечку", width=176, disabled=is_pending or leak, on_click=async_click(lambda e: send_leak(True))),
-                    ft.TextButton("Сбросить протечку", width=176, disabled=is_pending or not leak, on_click=async_click(lambda e: send_leak(False))),
+                    ft.OutlinedButton("Сымитировать протечку", width=176, disabled=is_pending or leak, on_click=async_click(lambda e: run_button_action(e, lambda: send_leak(True)))),
+                    ft.TextButton("Сбросить протечку", width=176, disabled=is_pending or not leak, on_click=async_click(lambda e: run_button_action(e, lambda: send_leak(False)))),
                     *([visual_pending_row("Отправка события...")] if is_pending else []),
                 ],
             ),
@@ -3359,7 +3378,7 @@ async def main(page: ft.Page):
 
     async def delete_demo_device_from_scene(device: dict[str, Any], ask_confirm: bool = True):
         if not is_demo_device(device):
-            show_message("Это реальное устройство. Его нельзя удалить через визуальную demo-сцену.")
+            show_message("Это реальное устройство. Его нельзя удалить через визуальную сцену.")
             return
         device_id = int(device.get("id", 0) or 0)
         if not device_id:
@@ -3849,7 +3868,7 @@ async def main(page: ft.Page):
             controls=[
                 ft.ElevatedButton("Создать демо-набор", icon=ft.Icons.AUTO_AWESOME, visible=is_admin(), disabled="preset" in pending, on_click=async_click(lambda e: run_button_action(e, create_demo_preset))),
                 ft.OutlinedButton("Переразложить устройства", icon=ft.Icons.GRID_VIEW, disabled=not devices, on_click=lambda e: relayout_visual_devices(room_id, devices)),
-                ft.OutlinedButton("Очистить демо-сцену", icon=ft.Icons.DELETE_SWEEP, visible=is_admin(), disabled=not devices or "clear" in pending, on_click=async_click(lambda e: clear_demo_scene())),
+                ft.OutlinedButton("Очистить демо-сцену", icon=ft.Icons.DELETE_SWEEP, visible=is_admin(), disabled=not devices or "clear" in pending, on_click=async_click(lambda e: run_button_action(e, clear_demo_scene))),
             ],
         )
 
@@ -3887,7 +3906,7 @@ async def main(page: ft.Page):
                         icon_size=17,
                         tooltip="Удалить demo-устройство",
                         visible=is_admin(),
-                        on_click=async_click(lambda e, d=device: delete_demo_device_from_scene(d)),
+                        on_click=async_click(lambda e, d=device: run_button_action(e, lambda: delete_demo_device_from_scene(d))),
                     ),
                 ),
             ],
