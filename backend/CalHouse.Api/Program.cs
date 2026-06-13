@@ -328,6 +328,17 @@ static bool ShouldAudit(string method, string path)
     {
         return false;
     }
+    if (path.StartsWith("/api/devices", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/rooms", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/scenes", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/rules", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/schedules", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/events", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/visual-demo", StringComparison.OrdinalIgnoreCase)
+        || path.StartsWith("/api/users", StringComparison.OrdinalIgnoreCase))
+    {
+        return false;
+    }
     return !HttpMethods.IsGet(method);
 }
 

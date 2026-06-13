@@ -723,7 +723,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         {
             var url = BuildHttpUrl(connection, protocol);
             using var handler = new HttpClientHandler();
-            using var client = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(3) };
+            using var client = new HttpClient(handler) { Timeout = DeviceNetworkTimeout };
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             var response = client.Send(request);
             message = response.IsSuccessStatusCode
@@ -758,7 +758,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         {
             using var client = new TcpClient();
             var connectTask = client.ConnectAsync(host, port);
-            var finished = Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) == 0;
+            var finished = Task.WaitAny([connectTask], DeviceNetworkTimeout) == 0;
             if (connectTask.IsFaulted)
             {
                 throw connectTask.Exception?.GetBaseException() ?? new SocketException();
@@ -788,7 +788,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             var token = GetConnectionValue(connection, "token");
             var url = BuildHomeAssistantApiUrl(GetConnectionValue(connection, "url"), $"states/{Uri.EscapeDataString(entityId)}");
 
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var client = new HttpClient { Timeout = DeviceNetworkTimeout };
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
             request.Headers.TryAddWithoutValidation("Accept", "application/json");
@@ -831,7 +831,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
     {
         try
         {
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var client = new HttpClient { Timeout = DeviceNetworkTimeout };
             using var request = new HttpRequestMessage(HttpMethod.Get, snapshotUrl);
             AddBasicAuthIfPresent(request, connection);
             using var response = client.Send(request);
@@ -868,10 +868,10 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         try
         {
             using var client = new TcpClient();
-            client.ReceiveTimeout = 3000;
-            client.SendTimeout = 3000;
+            client.ReceiveTimeout = DeviceNetworkTimeoutMilliseconds;
+            client.SendTimeout = DeviceNetworkTimeoutMilliseconds;
             var connectTask = client.ConnectAsync(host, port);
-            if (Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) != 0)
+            if (Task.WaitAny([connectTask], DeviceNetworkTimeout) != 0)
             {
                 message = "RTSP camera connection timeout";
                 return false;
@@ -1334,11 +1334,11 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
     private static void PublishMqtt(string host, int port, string topic, string payload, string username, string password, string clientId, bool retain)
     {
         using var client = new TcpClient();
-        client.ReceiveTimeout = 3000;
-        client.SendTimeout = 3000;
+        client.ReceiveTimeout = DeviceNetworkTimeoutMilliseconds;
+        client.SendTimeout = DeviceNetworkTimeoutMilliseconds;
 
         var connectTask = client.ConnectAsync(host, port);
-        if (Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) != 0)
+        if (Task.WaitAny([connectTask], DeviceNetworkTimeout) != 0)
         {
             throw new TimeoutException("MQTT broker did not accept TCP connection in 3 seconds");
         }
@@ -1504,11 +1504,11 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
             var bytes = Encoding.UTF8.GetBytes(payload);
 
             using var client = new TcpClient();
-            client.SendTimeout = 3000;
-            client.ReceiveTimeout = 3000;
+            client.SendTimeout = DeviceNetworkTimeoutMilliseconds;
+            client.ReceiveTimeout = DeviceNetworkTimeoutMilliseconds;
 
             var connectTask = client.ConnectAsync(host, port);
-            if (Task.WaitAny([connectTask], TimeSpan.FromSeconds(3)) != 0)
+            if (Task.WaitAny([connectTask], DeviceNetworkTimeout) != 0)
             {
                 return new DeviceCommandResult(false, "timeout", "TCP command timeout: device did not accept connection in 3 seconds");
             }
@@ -1559,7 +1559,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         try
         {
             var url = BuildShellyCommandUrl(device.Connection, protocol, targetIsOn);
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var client = new HttpClient { Timeout = DeviceNetworkTimeout };
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             AddBasicAuthIfPresent(request, device.Connection);
 
@@ -1640,7 +1640,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
         try
         {
             var url = BuildTasmotaCommandUrl(device.Connection, protocol, targetIsOn);
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var client = new HttpClient { Timeout = DeviceNetworkTimeout };
             using var request = new HttpRequestMessage(HttpMethod.Get, url);
             using var response = client.Send(request);
             var safeUrl = RedactSensitiveText(url);
@@ -1721,7 +1721,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
                 ["entity_id"] = entityId,
             });
 
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var client = new HttpClient { Timeout = DeviceNetworkTimeout };
             using var request = new HttpRequestMessage(HttpMethod.Post, url);
             request.Headers.TryAddWithoutValidation("Authorization", $"Bearer {token}");
             request.Headers.TryAddWithoutValidation("Accept", "application/json");
@@ -1763,7 +1763,7 @@ CREATE TABLE IF NOT EXISTS ScheduleRuns (
                 return new DeviceCommandResult(false, "no_connection", headersError);
             }
 
-            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(3) };
+            using var client = new HttpClient { Timeout = DeviceNetworkTimeout };
             using var request = new HttpRequestMessage(new HttpMethod(method), url);
 
             var contentType = headers.TryGetValue("Content-Type", out var requestedContentType)
