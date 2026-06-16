@@ -2,13 +2,14 @@
 import flet as ft
 import asyncio
 import difflib
-import httpx
 import json
 import re
 from datetime import datetime
 from time import perf_counter
 from typing import Any
 import validation as validators
+
+from calhouse_ui.api_client import ApiClientRequestError, ApiClientTimeoutError, CalHouseApiClient
 
 API_BASE = "http://localhost:5000"
 API_TIMEOUT_SECONDS = 3.0
@@ -390,7 +391,7 @@ async def main(page: ft.Page):
         "assistant_persona": "jarvis",
         "assistant_busy": False,
     }
-    api_client = httpx.AsyncClient(base_url=API_BASE, timeout=API_TIMEOUT_SECONDS)
+    api_client = CalHouseApiClient(API_BASE, API_TIMEOUT_SECONDS, lambda: state.get("token"))
 
     def close_api_client(_=None):
         clock_task = state.get("visual_demo_clock_task")
@@ -640,10 +641,7 @@ async def main(page: ft.Page):
 
     async def api_request(method: str, path: str, payload: dict[str, Any] | None = None, timeout: float = API_TIMEOUT_SECONDS):
         try:
-            headers = {}
-            if state.get("token"):
-                headers["Authorization"] = f"Bearer {state['token']}"
-            response = await api_client.request(method=method.upper(), url=path, json=payload, headers=headers, timeout=timeout)
+            response = await api_client.request(method, path, payload, timeout)
             if response.status_code >= 400:
                 try:
                     error_data = response.json()
@@ -680,9 +678,9 @@ async def main(page: ft.Page):
             if not response.text:
                 return None
             return response.json()
-        except httpx.TimeoutException as ex:
+        except ApiClientTimeoutError as ex:
             raise RuntimeError("Сервер долго не отвечает или устройство не ответило") from ex
-        except httpx.RequestError as ex:
+        except ApiClientRequestError as ex:
             raise RuntimeError(f"API недоступен: {ex}") from ex
 
     def sanitize_visual_api_payload(value: Any):
@@ -735,10 +733,7 @@ async def main(page: ft.Page):
         status: int | str = "error"
         error_text = ""
         try:
-            headers = {}
-            if state.get("token"):
-                headers["Authorization"] = f"Bearer {state['token']}"
-            response = await api_client.request(method=method.upper(), url=path, json=payload, headers=headers, timeout=timeout)
+            response = await api_client.request(method, path, payload, timeout)
             status = response.status_code
             if response.status_code >= 400:
                 try:
@@ -754,11 +749,11 @@ async def main(page: ft.Page):
             if not response.text:
                 return None
             return response.json()
-        except httpx.TimeoutException as ex:
+        except ApiClientTimeoutError as ex:
             status = "timeout"
             error_text = "Сервер долго не отвечает или устройство не ответило"
             raise RuntimeError(error_text) from ex
-        except httpx.RequestError as ex:
+        except ApiClientRequestError as ex:
             status = "error"
             error_text = f"API недоступен: {ex}"
             raise RuntimeError(error_text) from ex
